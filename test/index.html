@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Wiki-Title-Gen Interview Prep</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;1,9..144,500&family=IBM+Plex+Sans:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="qa.css">
+<style>
+  .toc{ list-style:none; margin:0 0 40px; padding:0; border-left:2px solid var(--rule); }
+  .toc li{ position:relative; padding:16px 0 16px 22px; border-bottom:1px solid var(--rule); max-width:none; margin:0; }
+  .toc li::before{ content:''; position:absolute; left:-7px; top:24px; width:12px; height:12px; border-radius:50%; background:var(--paper); border:2px solid var(--accent); }
+  .toc a{ text-decoration:none; display:block; }
+  .toc a:hover .name{ color:var(--accent); }
+  .toc .num{ font-family:'IBM Plex Mono', ui-monospace, Menlo, monospace; font-size:11px; color:var(--accent); text-transform:uppercase; letter-spacing:.08em; display:block; margin-bottom:4px; }
+  .toc .name{ font-family:'Fraunces', Georgia, serif; font-size:20px; font-weight:600; color:var(--ink); }
+  .toc .desc{ font-size:14.5px; color:var(--ink-soft); margin-top:4px; max-width:62ch; }
+</style>
+</head>
+<body>
+<div class="page">
+  <header class="masthead">
+    <div class="crumb"><span class="here">Interview prep</span></div>
+    <h1 class="title">Wiki-Title-Gen interview prep</h1>
+    <p class="dek">77 questions with written answers, for entry-level data science interviews (AMEX, JPMC and similar): your project first, then the fundamentals the project leads into, then the stats, SQL and Python screens.</p>
+  </header>
+  <main>
+
+    <section>
+      <h2>The bullets these answers defend</h2>
+      <p>Every project answer is written to match this version of your CV entry. If you change a bullet, check the matching answers still hold.</p>
+      <div class="cv">
+        <p class="cv-title">Wiki-Title-Gen: Seq2Seq Title Generation for Wikipedia · NLP course project [Mar 2025 – Apr 2025]</p>
+        <ul>
+          <li>Built GRU encoder–decoder baselines from scratch in PyTorch (bidirectional encoder, teacher forcing, GloVe-300d, hierarchical encoder, beam search). Ablations showed pretrained embeddings helped most, while extra architectural components did not. <a href="01-project-deep-dive.html#q5">Q5–Q13</a></li>
+          <li>Fine-tuned T5-small with Hugging Face Seq2SeqTrainer on 13.4k Wikipedia article–title pairs, reaching 0.86 ROUGE-L on the held-out test set and outperforming every from-scratch RNN variant. <a href="01-project-deep-dive.html#q14">Q14–Q18</a></li>
+          <li>Benchmarked zero-shot prompting on Flan-T5-base and Flan-T5-large (2 prompts × 2 sizes). Flan-T5-large matched fine-tuning at 0.87 ROUGE-L with no training, and prompt wording alone shifted ROUGE-L by 6.6%. <a href="01-project-deep-dive.html#q19">Q19–Q22</a></li>
+          <li>Cut spaCy preprocessing time 3.8× (~60 → 16 min) with batched pipelines, and GRU training time ~20% with fp16 mixed precision via Hugging Face Accelerate. <a href="01-project-deep-dive.html#q4">Q4</a>, <a href="01-project-deep-dive.html#q12">Q12</a></li>
+        </ul>
+      </div>
+    </section>
+
+    <ol class="toc">
+      <li><a href="01-project-deep-dive.html"><span class="num">25 questions</span><span class="name">1 · Project deep-dive</span></a><div class="desc">The walkthrough, preprocessing, the RNN ablation, T5 fine-tuning, Flan-T5 prompting, evaluation rigor, and deployment trade-offs, all in your voice, with likely follow-ups and the places you could get caught out.</div></li>
+      <li><a href="02-ml-nlp-fundamentals.html"><span class="num">25 questions</span><span class="name">2 · ML and NLP fundamentals</span></a><div class="desc">Bias–variance, overfitting, leakage, precision/recall, imbalance, regularization, logistic regression, tree ensembles, then tokenization, embeddings, attention, Transformers, decoding, metrics, LoRA and RAG, and hallucination.</div></li>
+      <li><a href="03-stats-sql-python.html"><span class="num">27 questions</span><span class="name">3 · Stats, SQL and Python</span></a><div class="desc">Bayes with fraud alerts, p-values, power, A/B test sizing, the CLT, Simpson's paradox, the bootstrap · window functions, join traps, gaps and islands on a transactions table · Python data structures, pandas, vectorization, generators, the GIL.</div></li>
+    </ol>
+
+    <section>
+      <h2>How to use this</h2>
+      <ul>
+        <li><strong>Answer out loud first, then read.</strong> The written answer is the target, not a script. Aim to hit its key points in your own words.</li>
+        <li><strong>Treat the red "Be careful" boxes as the highest priority.</strong> They mark where a natural-sounding claim would be inaccurate, and exactly what to say instead.</li>
+        <li><strong>Use the review links.</strong> Answers link to the matching page in <a href="../explanations/index.html">explanations/</a> for the full derivation.</li>
+        <li><strong>For project questions, lead with numbers and trade-offs.</strong> "0.86 ROUGE-L, tied with zero-shot Flan-T5 within about one article on a 100-article test set" is stronger than "it worked really well".</li>
+      </ul>
+    </section>
+  </main>
+</div>
+</body>
+</html>

@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Neural Network Basics · From Article to Headline</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;1,9..144,500&family=IBM+Plex+Sans:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.css">
+<link rel="stylesheet" href="style.css">
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.js"></script>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/contrib/auto-render.min.js"></script>
+<script defer src="render.js"></script>
+</head>
+<body>
+<div class="offline-note">Formulas are typeset by KaTeX, which loads from the internet. Without a connection they show as raw LaTeX.</div>
+<div class="page">
+  <header class="masthead">
+    <div class="crumb"><a href="index.html">Explanations</a><span class="sep">/</span><span class="here">1 · Neural network basics</span></div>
+    <span class="stage-tag">Prerequisite 1 of 2</span>
+    <h1 class="title">Neural network basics</h1>
+    <p class="dek">What a neural network is, how it computes, and how it learns. Nothing on this page is about language yet: it's the machinery every model in the project runs on.</p>
+  </header>
+  <main>
+
+    <div class="spec-quote">
+      <span class="box-label">assignment_spec.pdf · Overview</span>
+      <blockquote>"In this assignment, we will use Deep Neural Network (DNN) based language models to generate titles for new Wikipedia articles, given the body text."</blockquote>
+    </div>
+    <p>Before a "language model" can make sense, "deep neural network" has to. This page builds one from scratch: numbers, then layers, then a way of measuring mistakes, then the procedure that reduces them.</p>
+
+    <section>
+      <h2>Notation used everywhere</h2>
+      <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Symbol</th><th>Meaning</th></tr></thead>
+        <tbody>
+          <tr><td>\(x\)</td><td>a single number (a scalar)</td></tr>
+          <tr><td>\(\mathbf{x} \in \mathbb{R}^{d}\)</td><td>a vector: an ordered list of \(d\) real numbers, \((x_1, \ldots, x_d)\)</td></tr>
+          <tr><td>\(W \in \mathbb{R}^{m \times n}\)</td><td>a matrix: a grid of numbers with \(m\) rows and \(n\) columns</td></tr>
+          <tr><td>\(W^\top\)</td><td>transpose: rows become columns</td></tr>
+          <tr><td>\(\mathbf{a} \odot \mathbf{b}\)</td><td>element-wise product: \((a_1 b_1, \ldots, a_d b_d)\)</td></tr>
+          <tr><td>\([\mathbf{a}; \mathbf{b}]\)</td><td>concatenation: \(\mathbf{b}\)'s numbers appended after \(\mathbf{a}\)'s</td></tr>
+          <tr><td>\(\log\), \(\exp\)</td><td>natural logarithm and its inverse, \(e^x\)</td></tr>
+          <tr><td>\(\theta\)</td><td>all of a model's learnable numbers (its parameters), taken together</td></tr>
+        </tbody>
+      </table>
+      </div>
+    </section>
+
+    <section>
+      <h2>1. Vectors and the dot product</h2>
+      <p>A neural network only ever does arithmetic on lists of numbers. The single most important operation on two vectors of the same length is the <em class="term">dot product</em>: multiply matching positions and add everything up.</p>
+      <div class="eq">
+        \[ \mathbf{a} \cdot \mathbf{b} = \mathbf{a}^\top \mathbf{b} = \sum_{i=1}^{d} a_i b_i \]
+        <p class="note">It's large and positive when the two vectors point in similar directions, near zero when they're unrelated, and negative when they point in opposite directions. That makes it a <strong>similarity score</strong>. Attention in Part C1 is built entirely on this reading.</p>
+      </div>
+      <div class="worked">
+        <span class="box-label">Worked example</span>
+        <p>\(\mathbf{a} = (1, 2, 0)\), \(\mathbf{b} = (3, 1, 5)\): \(\;\mathbf{a}\cdot\mathbf{b} = 1\cdot 3 + 2 \cdot 1 + 0 \cdot 5 = 5\).</p>
+        <p>Multiplying a matrix by a vector is just many dot products at once: row \(i\) of \(W\) dotted with \(\mathbf{x}\) gives entry \(i\) of the result. So \(W \in \mathbb{R}^{m\times n}\) turns an \(n\)-number vector into an \(m\)-number vector.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>2. A linear layer</h2>
+      <p>The basic building block is a <em class="term">linear layer</em>: multiply the input by a matrix of weights, then add a vector of biases.</p>
+      <div class="eq">
+        \[ \mathbf{y} = W\mathbf{x} + \mathbf{b}, \qquad W \in \mathbb{R}^{m \times n},\; \mathbf{b} \in \mathbb{R}^{m},\; \mathbf{x} \in \mathbb{R}^{n},\; \mathbf{y} \in \mathbb{R}^{m} \]
+        <p class="note">The entries of \(W\) and \(\mathbf{b}\) are the layer's <em class="term">parameters</em>, and the network learns them. This layer has \(m \cdot n + m\) of them. For example, the layer that maps a 600-number vector down to 300 numbers in Part B1 has \(300 \cdot 600 + 300 = 180{,}300\) parameters.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>3. Activation functions, and why they're needed</h2>
+      <p>Stacking two linear layers without anything in between gains nothing, because the composition is still one linear layer:</p>
+      <div class="eq">
+        \[ W_2(W_1\mathbf{x} + \mathbf{b}_1) + \mathbf{b}_2 = \underbrace{(W_2 W_1)}_{\text{one matrix}}\mathbf{x} + \underbrace{(W_2\mathbf{b}_1 + \mathbf{b}_2)}_{\text{one vector}} \]
+      </div>
+      <p>To model anything more complicated than a straight-line relationship, a non-linear <em class="term">activation function</em> is applied to each number between layers. Three appear in this project:</p>
+      <div class="eq">
+        \[ \sigma(z) = \frac{1}{1 + e^{-z}} \in (0, 1), \qquad \sigma'(z) = \sigma(z)\big(1 - \sigma(z)\big) \]
+        \[ \tanh(z) = \frac{e^{z} - e^{-z}}{e^{z} + e^{-z}} \in (-1, 1), \qquad \tanh'(z) = 1 - \tanh^2(z) \]
+        \[ \operatorname{ReLU}(z) = \max(0, z), \qquad \operatorname{ReLU}'(z) = \begin{cases} 1 &amp; z \gt 0 \\ 0 &amp; z \lt 0 \end{cases} \]
+        <p class="note"><strong>Sigmoid</strong> \(\sigma\) squashes any number into \((0,1)\), so it behaves like a dimmer switch. The GRU's gates use it on the next page. <strong>tanh</strong> squashes into \((-1, 1)\). <strong>ReLU</strong> passes positive numbers through and zeroes negatives. The derivatives (written with a prime, \('\)) are listed because learning depends on them. Notice that \(\sigma'\) is at most \(0.25\) and \(\tanh'\) at most \(1\). That fact is why plain recurrent networks struggle, as the next page shows.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>4. A network is layers composed</h2>
+      <p>A "deep" network is several such layers applied one after another. A two-layer example:</p>
+      <div class="eq">
+        \[ \mathbf{z} = W_1\mathbf{x} + \mathbf{b}_1, \qquad \mathbf{a} = \operatorname{ReLU}(\mathbf{z}), \qquad \hat{\mathbf{y}} = W_2\mathbf{a} + \mathbf{b}_2 \]
+        <p class="note">Running the input through the layers to get the output \(\hat{\mathbf{y}}\) (read "y-hat", the prediction) is called the <em class="term">forward pass</em>. Every model in this project, from the RNN to T5, is this idea with more elaborate layers.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>5. A loss: one number that measures wrongness</h2>
+      <p>To learn, the network needs a single number saying how wrong its prediction was. That number is the <em class="term">loss</em>, \(\mathcal{L}\). The simplest example is squared error between a prediction \(\hat{y}\) and the true answer \(y\):</p>
+      <div class="eq">
+        \[ \mathcal{L} = (\hat{y} - y)^2 \]
+        <p class="note">Language models use a different loss, <em>cross-entropy</em>, because predicting a word means picking one option out of many rather than producing a number. That loss is defined on the next page. Everything below works the same for any loss.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>6. Gradient descent: how the network learns</h2>
+      <p>The <em class="term">gradient</em> \(\nabla_\theta \mathcal{L}\) is the vector of derivatives of the loss with respect to every parameter. Each entry says how much the loss would change if that one parameter were nudged up slightly. Stepping every parameter a little in the <em>opposite</em> direction lowers the loss:</p>
+      <div class="eq">
+        \[ \theta \leftarrow \theta - \eta \, \nabla_\theta \mathcal{L} \]
+        <p class="note">\(\eta\) (eta) is the <em class="term">learning rate</em>, which sets the step size. Too large and the steps overshoot the minimum. Too small and learning crawls. The RNNs in this project use \(\eta = 0.001\). Fine-tuning T5 uses \(\eta = 0.00002\), because its parameters already start somewhere good.</p>
+      </div>
+      <div class="worked">
+        <span class="box-label">Worked example: one parameter</span>
+        <p>Model \(\hat{y} = w x\), one training example \(x = 2,\ y = 6\), starting from \(w = 1\), with \(\eta = 0.05\).</p>
+        \[ \hat{y} = 2,\quad \mathcal{L} = (2-6)^2 = 16,\quad \frac{\partial \mathcal{L}}{\partial w} = 2(\hat{y}-y)\,x = 2(-4)(2) = -16 \]
+        \[ w \leftarrow 1 - 0.05 \cdot (-16) = 1.8 \;\;\Rightarrow\;\; \hat{y} = 3.6,\quad \mathcal{L} = 5.76 \]
+        <p>The loss fell from 16 to 5.76 in one step. Repeating it gives \(w = 2.28\), then \(2.568\), approaching the best value \(w = 3\).</p>
+      </div>
+      <div class="figure">
+        <svg viewBox="0 0 560 262" width="560" height="262" role="img" aria-label="Loss curve with gradient descent steps approaching the minimum">
+          <line x1="40" y1="220" x2="540" y2="220" stroke="var(--rule)" stroke-width="1"/>
+          <line x1="40" y1="14" x2="40" y2="220" stroke="var(--rule)" stroke-width="1"/>
+          <path d="M40,20 Q280,420 520,20" fill="none" stroke="var(--ink-soft)" stroke-width="2"/>
+          <g font-family="IBM Plex Mono, monospace" font-size="11" fill="var(--ink-soft)" text-anchor="middle">
+            <text x="120" y="236">1</text><text x="200" y="236">2</text><text x="280" y="236">3</text><text x="360" y="236">4</text><text x="440" y="236">5</text>
+          </g>
+          <text x="540" y="254" font-family="IBM Plex Mono, monospace" font-size="11" fill="var(--ink-soft)" text-anchor="end">parameter w</text>
+          <text x="48" y="28" font-family="IBM Plex Mono, monospace" font-size="11" fill="var(--ink-soft)">loss L(w)</text>
+          <g fill="var(--accent)">
+            <circle cx="120" cy="131.1" r="6"/><circle cx="184" cy="188" r="6"/><circle cx="222.4" cy="208.5" r="5.5"/><circle cx="245.4" cy="215.9" r="5"/>
+          </g>
+          <g stroke="var(--accent)" stroke-width="1.4" fill="none" stroke-dasharray="3,3">
+            <path d="M126,135 L178,184"/><path d="M190,191 L216,205"/><path d="M228,210 L239,214"/>
+          </g>
+          <circle cx="280" cy="220" r="5" fill="var(--good)"/>
+          <g font-family="IBM Plex Mono, monospace" font-size="11">
+            <text x="132" y="124" fill="var(--accent)">w=1, L=16</text>
+            <text x="174" y="207" fill="var(--accent)" text-anchor="end">w=1.8, L=5.76</text>
+            <text x="280" y="254" fill="var(--good)" text-anchor="middle">minimum at w=3</text>
+          </g>
+        </svg>
+        <figcaption>Each step moves downhill by an amount proportional to the slope, so the steps shrink as the curve flattens.</figcaption>
+      </div>
+    </section>
+
+    <section>
+      <h2>7. Backpropagation: the chain rule, applied layer by layer</h2>
+      <p>A real network has millions of parameters buried inside several layers, so their derivatives come from the <em class="term">chain rule</em>: if \(\mathcal{L}\) depends on \(\hat{\mathbf{y}}\), which depends on \(\mathbf{a}\), which depends on \(\mathbf{z}\), which depends on \(W_1\), the derivatives multiply along that path.</p>
+      <div class="eq">
+        \[ \frac{\partial \mathcal{L}}{\partial W_1} = \frac{\partial \mathcal{L}}{\partial \hat{\mathbf{y}}} \cdot \frac{\partial \hat{\mathbf{y}}}{\partial \mathbf{a}} \cdot \frac{\partial \mathbf{a}}{\partial \mathbf{z}} \cdot \frac{\partial \mathbf{z}}{\partial W_1} \]
+        <p class="note"><em class="term">Backpropagation</em> computes these products starting at the loss and moving backwards through the layers, reusing each partial product for the layer before it. Libraries like PyTorch do this automatically: calling <code>loss.backward()</code> fills in the gradient of every parameter. The key point for later: the gradient reaching an early layer is a <strong>product of many factors</strong>. If those factors are consistently smaller than 1, the product shrinks towards zero.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>8. Mini-batches, steps and epochs</h2>
+      <p>Computing the gradient over all ~14,000 articles for every single update would be slow. Instead the data is shuffled and split into <em class="term">mini-batches</em> of \(B\) examples, and the loss is averaged over just that batch:</p>
+      <div class="eq">
+        \[ \mathcal{L}_{\text{batch}} = \frac{1}{B}\sum_{n=1}^{B} \mathcal{L}_n, \qquad \text{steps per epoch} = \left\lfloor \frac{N}{B} \right\rfloor \]
+        <p class="note">One parameter update is a <em class="term">step</em>. One full pass over all \(N\) training examples is an <em class="term">epoch</em>. The floor \(\lfloor\cdot\rfloor\) applies when a leftover partial batch is dropped (<code>drop_last=True</code> in the RNN code). Part B1 trains on \(N = 13{,}379\) articles with \(B = 8\): \(\lfloor 13{,}379 / 8 \rfloor = 1{,}672\) steps per epoch, for 3 epochs.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>9. Adam: gradient descent with memory</h2>
+      <p>Plain gradient descent uses the same step size for every parameter and reacts only to the current batch's noisy gradient. <em class="term">Adam</em>, the optimizer used for every model here, keeps two running averages per parameter:</p>
+      <div class="eq">
+        \[ \begin{aligned}
+          \mathbf{m}_s &amp;= \beta_1 \mathbf{m}_{s-1} + (1-\beta_1)\,\mathbf{g}_s &amp;&amp; \text{average gradient (momentum)} \\
+          \mathbf{v}_s &amp;= \beta_2 \mathbf{v}_{s-1} + (1-\beta_2)\,\mathbf{g}_s \odot \mathbf{g}_s &amp;&amp; \text{average squared gradient} \\
+          \hat{\mathbf{m}}_s &amp;= \frac{\mathbf{m}_s}{1-\beta_1^{\,s}}, \quad \hat{\mathbf{v}}_s = \frac{\mathbf{v}_s}{1-\beta_2^{\,s}} &amp;&amp; \text{correct the start-up bias} \\
+          \theta_s &amp;= \theta_{s-1} - \eta\, \frac{\hat{\mathbf{m}}_s}{\sqrt{\hat{\mathbf{v}}_s} + \epsilon} &amp;&amp; \text{update}
+        \end{aligned} \]
+        <p class="note">\(\mathbf{g}_s\) is the gradient at step \(s\), and the square root and division are element-wise. Defaults are \(\beta_1 = 0.9\), \(\beta_2 = 0.999\), \(\epsilon = 10^{-8}\). The momentum term smooths out batch-to-batch noise. Dividing by \(\sqrt{\hat{\mathbf{v}}}\) gives each parameter its own step size: parameters with consistently large gradients take smaller steps, and rarely-updated ones take larger steps. The bias correction matters only in the first few hundred steps, when \(\mathbf{m}\) and \(\mathbf{v}\) are still close to their starting value of zero.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>10. Generalization: training, validation and test data</h2>
+      <p>The goal isn't to do well on the training articles. It's to do well on articles the model has never seen. That's why data is split three ways:</p>
+      <ul>
+        <li><strong>Training set</strong>: used to compute gradients and update parameters.</li>
+        <li><strong>Validation set</strong>: never trained on. Used to check progress and choose settings like the learning rate.</li>
+        <li><strong>Test set</strong>: touched only once, at the end, to report final scores. Here it's the 100-article <code>test.csv</code>.</li>
+      </ul>
+      <p>Two failure modes, told apart by comparing the losses:</p>
+      <ul>
+        <li><em class="term">Underfitting</em>: training loss stays high. The model can't even fit the data it's shown, usually because it lacks the capacity, the information, or enough training. Part B2's hierarchical encoder shows exactly this signature.</li>
+        <li><em class="term">Overfitting</em>: training loss keeps falling while validation loss rises. The model is memorizing training examples instead of learning patterns that transfer.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>11. Three training aids that appear in the code</h2>
+      <h3>Dropout</h3>
+      <p>During training, each number in a vector is independently zeroed with probability \(p\), and the survivors are scaled up so the expected value is unchanged. At evaluation time dropout is switched off.</p>
+      <div class="eq">
+        \[ \tilde{x}_i = \frac{r_i}{1-p}\, x_i, \qquad r_i \sim \operatorname{Bernoulli}(1-p) \]
+        <p class="note">\(r_i\) is 1 with probability \(1-p\) and 0 otherwise. Because the network can't rely on any single number always being present, it learns more redundant, robust features, which reduces overfitting. The RNN encoders use \(p = 0.3\) on their word embeddings.</p>
+      </div>
+      <h3>Weight decay</h3>
+      <p>Each step also shrinks every weight slightly towards zero, which discourages the model from relying on a few very large weights. With the "decoupled" form used by the <code>AdamW</code> optimizer in Part C1:</p>
+      <div class="eq">
+        \[ \theta \leftarrow \theta - \eta\,\lambda\,\theta \quad \text{(applied alongside the Adam update, with } \lambda = 0.01 \text{ in Part C1)} \]
+      </div>
+      <h3>Gradient clipping</h3>
+      <p>If one unlucky batch produces a huge gradient, a single step can wreck the parameters. Clipping rescales the whole gradient whenever its length exceeds a threshold \(c\):</p>
+      <div class="eq">
+        \[ \mathbf{g} \leftarrow \mathbf{g} \cdot \min\!\left(1,\; \frac{c}{\lVert \mathbf{g} \rVert}\right), \qquad \lVert \mathbf{g} \rVert = \sqrt{\textstyle\sum_i g_i^2} \]
+        <p class="note">The direction is kept and only the length is capped. The Part B1 training loop uses \(c = 1.0\).</p>
+      </div>
+    </section>
+
+    <div class="recap"><span class="box-label">Carried forward</span>dot product as similarity · linear layers and their parameter counts · sigmoid, tanh and ReLU with their derivatives · loss · gradient descent and learning rate · backpropagation as a product of factors · batches, steps and epochs · Adam · train/validation/test with under- and overfitting · dropout, weight decay and gradient clipping.</div>
+  </main>
+  <div class="pager">
+    <a href="index.html"><span class="lbl">Back</span>← Contents</a>
+    <a class="next" href="02-sequence-models.html"><span class="lbl">Next</span>2 · Sequence models →</a>
+  </div>
+</div>
+</body>
+</html>

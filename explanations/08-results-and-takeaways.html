@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Results and Takeaways · From Article to Headline</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;1,9..144,500&family=IBM+Plex+Sans:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.css">
+<link rel="stylesheet" href="style.css">
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.js"></script>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/contrib/auto-render.min.js"></script>
+<script defer src="render.js"></script>
+</head>
+<body>
+<div class="offline-note">Formulas are typeset by KaTeX, which loads from the internet. Without a connection they show as raw LaTeX.</div>
+<div class="page">
+  <header class="masthead">
+    <div class="crumb"><a href="index.html">Explanations</a><span class="sep">/</span><span class="here">Results and takeaways</span></div>
+    <span class="stage-tag">Wrap-up</span>
+    <h1 class="title">All results, and what they support</h1>
+    <p class="dek">Every number from every part in one place, with how each was measured, how long each part took, and the conclusions the evidence can and can't carry.</p>
+  </header>
+  <main>
+
+    <div class="recap"><span class="box-label">Uses</span>results and measurement notes from <a href="04-part-b1-basic-rnn.html">B1</a>, <a href="05-part-b2-improvements.html">B2</a>, <a href="06-part-c1-transformer.html">C1</a> and <a href="07-part-c2-prompting.html">C2</a>. Nothing new is computed on this page, only compared.</div>
+
+    <section>
+      <div class="spec-quote">
+        <span class="box-label">assignment_spec.pdf · Submission instructions, report</span>
+        <blockquote>"Report the time taken (in seconds) for each part of the code to run. ROUGE-1,2,L F1 scores in the form of tables and/or plots: for the basic RNN model, RNN with each of the 4 individual improvements and with all the improvements, and the Transformer models, finetuned and zero-shot prompting. Some intuitions/discussions, based on the performance of different model variants."</blockquote>
+      </div>
+      <h2>Every score, with how it was measured</h2>
+      <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Model</th><th>References</th><th>Scoring</th><th class="num">R-1</th><th class="num">R-2</th><th class="num">R-L</th></tr></thead>
+        <tbody>
+          <tr><td>B1 · basic RNN</td><td>cleaned</td><td>stemmer · full 10-token output</td><td class="num">0.250</td><td class="num">0.098</td><td class="num">0.247</td></tr>
+          <tr><td>B2 run 1 · + GloVe</td><td>cleaned</td><td>stemmer · cut to reference length</td><td class="num">0.499</td><td class="num">0.263</td><td class="num">0.499</td></tr>
+          <tr><td>B2 run 2 · + hierarchical</td><td>cleaned</td><td>stemmer · cut to reference length</td><td class="num">0.325</td><td class="num">0.109</td><td class="num">0.325</td></tr>
+          <tr><td>B2 run 3 · + two-GRU decoder</td><td>cleaned</td><td>stemmer · cut to reference length</td><td class="num">0.305</td><td class="num">0.082</td><td class="num">0.302</td></tr>
+          <tr><td>B2 run 4 · + beam search</td><td>cleaned</td><td>stemmer · cut to reference length</td><td class="num">0.326</td><td class="num">0.071</td><td class="num">0.326</td></tr>
+          <tr class="hi"><td>C1 · T5-small, fine-tuned</td><td>raw</td><td>stemmer</td><td class="num">0.863</td><td class="num">0.652</td><td class="num">0.863</td></tr>
+          <tr><td>C2 · Flan-T5-base, prompt 1</td><td>raw</td><td>no stemmer</td><td class="num">0.678</td><td class="num">0.478</td><td class="num">0.681</td></tr>
+          <tr><td>C2 · Flan-T5-base, prompt 2</td><td>raw</td><td>no stemmer</td><td class="num">0.633</td><td class="num">0.461</td><td class="num">0.632</td></tr>
+          <tr><td>C2 · Flan-T5-large, prompt 1</td><td>raw</td><td>no stemmer</td><td class="num">0.822</td><td class="num">0.638</td><td class="num">0.821</td></tr>
+          <tr class="hi"><td>C2 · Flan-T5-large, prompt 2</td><td>raw</td><td>no stemmer</td><td class="num">0.873</td><td class="num">0.645</td><td class="num">0.875</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p>All scores are averages over the same 100 articles from <code>test.csv</code>. "Cleaned" references went through Part A's cleaning and the RNN vocabulary, so words outside the vocabulary appear as "unk". "Raw" references are the original titles.</p>
+    </section>
+
+    <section>
+      <h2>Which comparisons are fair</h2>
+      <p>A difference between two rows means something only if the rows differ in the one thing being compared. Using the notes gathered on each page:</p>
+      <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Comparison</th><th>Same measurement?</th><th>What else differs</th><th>Verdict</th></tr></thead>
+        <tbody>
+          <tr><td>B2 runs 1 → 2 → 3</td><td>yes</td><td>one component each; single training runs</td><td>fair; small gaps are uncertain</td></tr>
+          <tr><td>B2 run 3 → 4 (beam search)</td><td>yes</td><td>run 4 also retrains the model; beam scores raw logits</td><td>beam search's own effect isn't isolated</td></tr>
+          <tr><td>B1 → B2 run 1 (GloVe)</td><td>no: output cut to reference length in B2</td><td>+500 training articles; no gradient clipping</td><td>trust the training-loss drop, not the ROUGE jump</td></tr>
+          <tr><td>Part B → Part C</td><td>no: cleaned vs. raw references</td><td>everything</td><td>the gap is too large to be explained by the scoring</td></tr>
+          <tr><td>C1 → C2</td><td>nearly: stemmer on vs. off</td><td>model, size, training</td><td>stemming can only raise scores, so this is conservative for C2</td></tr>
+          <tr><td>C2 prompts and sizes</td><td>yes</td><td>one factor each</td><td>fair</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p><strong>How big is a meaningful difference?</strong> Each score is a mean over 100 articles, so:</p>
+      <div class="eq">
+        \[ \overline{F} = \frac{1}{100}\sum_{k=1}^{100} F^{(k)}, \qquad F^{(k)} \in [0, 1] \;\Rightarrow\; \text{one article changing from 0 to 1 moves } \overline{F} \text{ by } 0.01 \]
+        <p class="note">A gap of 0.012 (C1 against the best C2 row) is about one article's worth, too little to separate the two on this test set. A gap of 0.17 (GloVe run 1 against hierarchical run 2) is seventeen articles' worth. The per-article scores that a formal significance test would need weren't saved, so this rule of thumb is the most the logs support.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>Time taken for each part</h2>
+      <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Part</th><th>What was timed</th><th class="num">Seconds</th></tr></thead>
+        <tbody>
+          <tr><td>A</td><td>clean 13,879 training articles (spaCy, batched)</td><td class="num">949</td></tr>
+          <tr><td>B1</td><td>train 3 epochs</td><td class="num">938</td></tr>
+          <tr><td>B2 run 1</td><td>train 3 epochs · evaluate</td><td class="num">1,013 · 1.08</td></tr>
+          <tr><td>B2 run 2</td><td>train · evaluate</td><td class="num">1,025 · 1.11</td></tr>
+          <tr><td>B2 run 3</td><td>train · evaluate</td><td class="num">1,076 · 1.19</td></tr>
+          <tr><td>B2 run 4</td><td>train · evaluate with beam search</td><td class="num">1,074 · 6.85</td></tr>
+          <tr><td>C1</td><td>load, tokenize, fine-tune 3 epochs (GPU)</td><td class="num">1,079</td></tr>
+          <tr><td>C2</td><td>400 zero-shot generations, 2 models × 2 prompts (CPU)</td><td class="num">1,522</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p>Two timing facts carry real information. <strong>Beam search</strong> made RNN evaluation about \(6.85/1.19 \approx 5.8\times\) slower. And <strong>C2's time</strong> is dominated by running on the CPU (C2, section 3), so it says little about Flan-T5's intrinsic speed.</p>
+    </section>
+
+    <section>
+      <h2>What the evidence supports</h2>
+      <h3>1. Pretrained knowledge was the biggest lever</h3>
+      <p>Within Part B, the one upgrade that brought in outside knowledge, GloVe, is the one with clear evidence of helping: lower training loss at every epoch, and the best ROUGE among the B2 runs. Across parts, both pretrained Transformers beat every RNN by a margin (0.33–0.50 → 0.86–0.87) far larger than any measurement difference. The RNN had to learn language <em>and</em> the task from 13,379 articles. T5 only had to learn the task.</p>
+      <h3>2. Added structure helps only if it adds usable information</h3>
+      <p>The hierarchical encoder, as implemented, replaced a GRU summary with one padding-diluted average of the whole article. Training loss rose from 1.30 to 3.12: the model lost the ability to fit even its training data. The two-GRU decoder and beam search, built on top of that encoder, showed no difference that single runs can distinguish from noise, and beam search cost 5.8× the evaluation time. More components didn't mean more capability. What mattered was whether a component gave the decoder better access to the article, and cross-attention in C1 is the component that did.</p>
+      <h3>3. A larger instruction-tuned model matched fine-tuning without any training</h3>
+      <p>Flan-T5-large, never trained on these articles, scored within about one article's worth of fine-tuned T5-small (0.8745 vs. 0.8626 ROUGE-L), and the scoring difference works against it. Scale was decisive: Flan-T5-base, with the same instruction tuning, trailed by 14–24 articles' worth. Prompt wording shifted scores by about five articles' worth, in opposite directions for the two sizes.</p>
+      <h3>4. A comparison is only as good as its measurement</h3>
+      <p>The biggest apparent RNN improvement (0.25 → 0.50) coincides with an evaluation change. Part B and Part C score against different references. C1 and C2 use different stemming. Every row is a single run on 100 articles. None of this overturns lessons 1–3, whose effects are large, but it limits what the smaller gaps can mean.</p>
+    </section>
+
+    <section>
+      <h2>What would make the comparisons cleaner</h2>
+      <p>Each item follows from a specific note on an earlier page:</p>
+      <ul>
+        <li>Score every model with one evaluation function, one reference set (raw titles) and one stemmer setting. <a href="05-part-b2-improvements.html">B2</a>, <a href="07-part-c2-prompting.html">C2</a></li>
+        <li>Append <code>&lt;EOS&gt;</code> to RNN training titles so generation ends by itself, instead of cutting outputs to the reference length. <a href="04-part-b1-basic-rnn.html">B1</a></li>
+        <li>Split sentences <em>before</em> removing punctuation, so the hierarchical encoder can average per sentence as specified, and exclude padding from the average. <a href="05-part-b2-improvements.html">B2</a></li>
+        <li>Rank beams by log-softmax scores rather than raw logits, and reuse a trained model when testing a decoding change. <a href="05-part-b2-improvements.html">B2</a></li>
+        <li>Run each upgrade individually on top of B1, as the spec's report section asks, and repeat runs with different random seeds. <a href="05-part-b2-improvements.html">B2</a></li>
+        <li>Mask padded label positions (set them to <code>-100</code>) so T5's loss reflects real title tokens. <a href="06-part-c1-transformer.html">C1</a></li>
+        <li>Save per-article scores so differences can be tested properly. This page.</li>
+      </ul>
+    </section>
+
+  </main>
+  <div class="pager">
+    <a href="07-part-c2-prompting.html"><span class="lbl">Back</span>← Part C2 · Prompting Flan-T5</a>
+    <a class="next" href="index.html"><span class="lbl">Done</span>Back to contents →</a>
+  </div>
+</div>
+</body>
+</html>

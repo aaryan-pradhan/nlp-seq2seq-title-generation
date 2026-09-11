@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Part A: Preprocessing · From Article to Headline</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;1,9..144,500&family=IBM+Plex+Sans:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.css">
+<link rel="stylesheet" href="style.css">
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.js"></script>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/contrib/auto-render.min.js"></script>
+<script defer src="render.js"></script>
+</head>
+<body>
+<div class="offline-note">Formulas are typeset by KaTeX, which loads from the internet. Without a connection they show as raw LaTeX.</div>
+<div class="page">
+  <header class="masthead">
+    <div class="crumb"><a href="index.html">Explanations</a><span class="sep">/</span><span class="here">Part A · Preprocessing</span></div>
+    <span class="stage-tag">Part A</span>
+    <h1 class="title">Preprocessing</h1>
+    <p class="dek">Turning raw Wikipedia text into the cleaned word sequences the RNN models in Part B train on. This also decides what the RNN is asked to reproduce as a "title".</p>
+  </header>
+  <main>
+
+    <div class="recap"><span class="box-label">Uses</span>tokens and vocabulary from <a href="02-sequence-models.html">page 2, section 1</a>, and the training/validation/test split from <a href="01-neural-network-basics.html">page 1, section 10</a>.</div>
+
+    <section>
+      <div class="spec-quote">
+        <span class="box-label">assignment_spec.pdf · A. Dataset and Preprocessing</span>
+        <blockquote>"The dataset contains a random selection of Wikipedia articles, in two standard CSV files. Each row contains the title of the article along with the text body. For this assignment use the text field as input and the title as the target output. […] 1. Extract 500 articles from the training set and keep them as the validation/development set. 2. Remove punctuations and non-ASCII characters (if any) 3. Stopword removal 4. Stemming/Lemmatization 5. Any other pre-processing steps you feel will improve efficiency and make the data more suitable for this type of language modeling."</blockquote>
+      </div>
+      <h2>The data</h2>
+      <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>File</th><th class="num">Articles</th><th>Used for</th></tr></thead>
+        <tbody>
+          <tr><td><code>train.csv</code></td><td class="num">13,879</td><td>training, minus a 500-article validation split where one was held out (see note below)</td></tr>
+          <tr><td><code>test.csv</code></td><td class="num">100</td><td>final scores for every model in Parts B and C</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p>Each row is a <code>(text, title)</code> pair: the article body is the input \(\mathbf{x}\) and the real title is the target \(\mathbf{y}\). The count of 13,879 comes from the preprocessing progress bar in <code>01_preprocessing.ipynb</code>.</p>
+      <div class="callout impl">
+        <span class="box-label">In the notebooks · where the 500 validation articles went</span>
+        <p>The B1 run and the T5 fine-tuning in C1 hold out the last 500 training rows (<code>df2[:-500]</code> and <code>[-500:]</code>). The four B2 runs build their data from the full <code>df2</code>, so they train on all 13,879 articles. None of the runs touch <code>test.csv</code> during training, so the test scores remain fair.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>What each cleaning step does, and why</h2>
+      <h3>Stopword removal</h3>
+      <p>Words like "the", "of", "is", "over" appear in nearly every article, so they say almost nothing about what one specific article is about. Removing them shortens every sequence (fewer recurrent steps, and less distance for the gradient to travel, per page 2 section 8). It also stops frequent filler words from taking up vocabulary slots.</p>
+      <h3>Stemming vs. lemmatization</h3>
+      <p>Both reduce different forms of a word to one shared form, so "reef" and "reefs" share a single embedding row instead of splitting the training signal between two. They do it differently:</p>
+      <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Word</th><th>Stemming (Porter, rule-based suffix chopping)</th><th>Lemmatization (dictionary + part of speech)</th></tr></thead>
+        <tbody>
+          <tr><td>studies</td><td>studi</td><td>study</td></tr>
+          <tr><td>largest</td><td>largest</td><td>large</td></tr>
+          <tr><td>composed</td><td>compos</td><td>compose</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p>Stemming can produce non-words, and lemmatization produces real dictionary forms. This project uses lemmatization. That matters in Part B2: GloVe's pretrained vocabulary contains "study" but not "studi".</p>
+      <h3>Punctuation, numbers and symbols</h3>
+      <p>Only purely alphabetic tokens are kept, which removes punctuation, numbers like "2,900" and mixed tokens like "'s".</p>
+    </section>
+
+    <section>
+      <h2>The exact rule the code applies</h2>
+      <p>For every token spaCy produces, the notebook keeps the lowercase lemma if and only if the token is not a stopword, not punctuation, and purely alphabetic:</p>
+      <div class="eq">
+        \[ \text{keep}(\tau) = \neg\,\texttt{is\_stop}(\tau) \;\wedge\; \neg\,\texttt{is\_punct}(\tau) \;\wedge\; \texttt{is\_alpha}(\tau), \qquad \text{output} = \texttt{lower}\big(\texttt{lemma}(\tau)\big) \]
+        <p class="note">\(\neg\) is "not" and \(\wedge\) is "and". The kept lemmas are joined back together with spaces. This same rule is applied to article texts and to titles, in both the training and test files.</p>
+      </div>
+      <div class="worked">
+        <span class="box-label">Worked example, token by token (illustrative sentence; exact lemmas depend on spaCy's tagger)</span>
+        <p>"The Great Barrier Reef is the world's largest coral reef system, composed of over 2,900 reefs."</p>
+        <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>Token</th><th>Stopword?</th><th>Punct?</th><th>Alphabetic?</th><th>Kept as</th></tr></thead>
+          <tbody>
+            <tr><td>The</td><td>yes</td><td>no</td><td>yes</td><td>—</td></tr>
+            <tr><td>Great</td><td>no</td><td>no</td><td>yes</td><td><strong>great</strong></td></tr>
+            <tr><td>Barrier</td><td>no</td><td>no</td><td>yes</td><td><strong>barrier</strong></td></tr>
+            <tr><td>Reef</td><td>no</td><td>no</td><td>yes</td><td><strong>reef</strong></td></tr>
+            <tr><td>is, the</td><td>yes</td><td>no</td><td>yes</td><td>—</td></tr>
+            <tr><td>world</td><td>no</td><td>no</td><td>yes</td><td><strong>world</strong></td></tr>
+            <tr><td>'s</td><td>yes</td><td>no</td><td>no</td><td>—</td></tr>
+            <tr><td>largest</td><td>no</td><td>no</td><td>yes</td><td><strong>large</strong></td></tr>
+            <tr><td>coral, reef, system</td><td>no</td><td>no</td><td>yes</td><td><strong>coral reef system</strong></td></tr>
+            <tr><td>,</td><td>no</td><td>yes</td><td>no</td><td>—</td></tr>
+            <tr><td>composed</td><td>no</td><td>no</td><td>yes</td><td><strong>compose</strong></td></tr>
+            <tr><td>of, over</td><td>yes</td><td>no</td><td>yes</td><td>—</td></tr>
+            <tr><td>2,900</td><td>no</td><td>no</td><td>no</td><td>—</td></tr>
+            <tr><td>reefs</td><td>no</td><td>no</td><td>yes</td><td><strong>reef</strong></td></tr>
+            <tr><td>.</td><td>no</td><td>yes</td><td>no</td><td>—</td></tr>
+          </tbody>
+        </table>
+        </div>
+        <p>Result: <code>great barrier reef world large coral reef system compose reef</code></p>
+      </div>
+      <div class="callout impl">
+        <span class="box-label">In the notebooks · three consequences worth knowing</span>
+        <ul>
+          <li><strong>The RNN's target titles are cleaned too.</strong> Part B learns to produce lowercase lemma sequences like "great barrier reef", and its ROUGE scores compare against those cleaned titles. Parts C1 and C2 use the raw text and raw titles instead, as the spec requires. So Part B and Part C scores aren't measured against identical references.</li>
+          <li><strong>Sentence boundaries are gone.</strong> Removing punctuation deletes the periods that separate sentences, so the cleaned text is one continuous stream of words. This matters for Part B2's hierarchical encoder, which is specified to work sentence by sentence.</li>
+          <li><strong>Non-ASCII letters survive.</strong> <code>is_alpha</code> is true for accented letters, so a word like "café" is kept. Spec step 2's non-ASCII removal is only partly covered by this filter.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section>
+      <h2>Why spaCy, and why batching made it fast</h2>
+      <div class="spec-quote">
+        <span class="box-label">docs/report.pdf</span>
+        <blockquote>"I had tried multiple libraries including NLTK, spacy and their various methods for stopwords removal and lemmatization. But as spaCy is designed for large-scale NLP tasks and is significantly faster than NLTK due to its Cython-based implementation, I choose to do the cleaning through it. […] By implementing batch processing, I have significantly improved the preprocessing time […] which would otherwise was taking around an hour to do so."</blockquote>
+      </div>
+      <p>spaCy's lemmatizer needs each word's part of speech ("composed" used as a verb lemmatizes to "compose"), so it runs a small statistical model over the text. Two choices keep that affordable:</p>
+      <ul>
+        <li><strong>Only what's needed runs.</strong> The dependency parser and named-entity recognizer aren't used, so they're disabled when loading <code>en_core_web_sm</code>.</li>
+        <li><strong>Documents are processed in batches.</strong> <code>nlp.pipe(texts, batch_size=50)</code> sends 50 documents at a time through the pipeline. Its model computations run as one grouped operation per batch rather than 50 separate calls, which spreads the fixed cost of each call over many documents.</li>
+      </ul>
+      <div class="eq">
+        \[ \text{throughput} = 14.62 \text{ articles/s} \;\Rightarrow\; \frac{13{,}879}{14.62} \approx 949 \text{ s} \approx 15 \text{ min } 49 \text{ s} \]
+        <p class="note">The rate and total time come from the notebook's progress bar. Against the report's roughly one-hour figure for the unbatched approach, that's close to a 3.8× speed-up (\(60 / 15.8 \approx 3.8\)).</p>
+      </div>
+    </section>
+
+    <div class="recap"><span class="box-label">Carried forward</span>13,879 cleaned training articles and titles plus 100 cleaned test pairs, all lowercase lemmas with stopwords, punctuation and numbers removed · Part B's references are cleaned titles, Part C's are raw · no sentence boundaries survive in the cleaned text.</div>
+  </main>
+  <div class="pager">
+    <a href="02-sequence-models.html"><span class="lbl">Back</span>← 2 · Sequence models</a>
+    <a class="next" href="04-part-b1-basic-rnn.html"><span class="lbl">Next</span>Part B1 · Basic RNN →</a>
+  </div>
+</div>
+</body>
+</html>

@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Part C2: Prompting Flan-T5 · From Article to Headline</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;1,9..144,500&family=IBM+Plex+Sans:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.css">
+<link rel="stylesheet" href="style.css">
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.js"></script>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/contrib/auto-render.min.js"></script>
+<script defer src="render.js"></script>
+</head>
+<body>
+<div class="offline-note">Formulas are typeset by KaTeX, which loads from the internet. Without a connection they show as raw LaTeX.</div>
+<div class="page">
+  <header class="masthead">
+    <div class="crumb"><a href="index.html">Explanations</a><span class="sep">/</span><span class="here">Part C2 · Prompting Flan-T5</span></div>
+    <span class="stage-tag">Part C2</span>
+    <h1 class="title">Prompting Flan-T5, zero-shot</h1>
+    <p class="dek">The same Transformer machinery as C1, but no training on this dataset at all. The model gets an instruction and an article, and nothing else.</p>
+  </header>
+  <main>
+
+    <div class="recap"><span class="box-label">Uses</span>the T5 encoder–decoder, pretraining, fine-tuning and HuggingFace beam search from <a href="06-part-c1-transformer.html">Part C1</a> · ROUGE and the per-article averaging rule from <a href="04-part-b1-basic-rnn.html">B1</a> · cross-entropy training from <a href="02-sequence-models.html">page 2</a>.</div>
+
+    <section>
+      <div class="spec-quote">
+        <span class="box-label">assignment_spec.pdf · C2. Prompt engineering</span>
+        <blockquote>"Modern Transformer models have already been "Instruction-tuned" on a wide range of tasks, which improve their generalizability. This allows the model to perform well on new unseen tasks/data without additional finetuning. Google's Flan-T5 model family is a well-known Instruction-tuned Seq2seq LM, excelling in various NLP tasks. You simply give an instruction describing the task to be performed, or a "prompt"; followed by the actual data, as input text to the model. […] 4. Load the pretrained google/flan-t5-base and google/flan-t5-large models using the AutoModelForSeq2SeqLM class. 5. Try giving each of the models at least 2 variations of prompts to generate the titles from the article bodies. Evaluate the generated outputs as before."</blockquote>
+      </div>
+    </section>
+
+    <section>
+      <h2>1. Instruction tuning</h2>
+      <p>Part C1 fine-tuned T5 on <em>one</em> task. <em class="term">Instruction tuning</em> fine-tunes a pretrained model on a very large collection of tasks, each written as a plain-language instruction followed by its input, with the answer as the target. Examples: "Translate to German: …", "Is this review positive or negative? …", "Summarize: …". Flan-T5 was produced this way from T5 checkpoints, using roughly 1,800 tasks.</p>
+      <p>Mechanically nothing is new. It's the same encoder–decoder and the same cross-entropy loss (page 2, section 6), with teacher forcing. What changes is the <strong>data</strong>. Because the instruction is part of the input and varies across so many tasks, the model learns the general skill of reading an instruction and doing what it says. That skill carries over to instructions it never saw during training, which is exactly what the spec relies on.</p>
+      <div class="tbl-wrap">
+      <table>
+        <thead><tr><th></th><th>T5-small (C1)</th><th>Flan-T5-base</th><th>Flan-T5-large</th></tr></thead>
+        <tbody>
+          <tr><td>Encoder / decoder blocks</td><td>6 / 6</td><td>12 / 12</td><td>24 / 24</td></tr>
+          <tr><td>Vector size \(d\)</td><td>512</td><td>768</td><td>1,024</td></tr>
+          <tr><td>Parameters</td><td>≈ 60M</td><td>≈ 250M</td><td>≈ 780M</td></tr>
+          <tr><td>Trained on this dataset?</td><td>yes, 3 epochs</td><td>no</td><td>no</td></tr>
+        </tbody>
+      </table>
+      </div>
+    </section>
+
+    <section>
+      <h2>2. Three ways to use a model: fine-tuning, zero-shot, few-shot</h2>
+      <p>Write \(\theta\) for the model's parameters. The three approaches differ only in whether \(\theta\) changes and in what goes into the input:</p>
+      <div class="eq">
+        \[ \begin{aligned}
+          \textbf{fine-tuning (C1): } &amp; \theta \leftarrow \theta - \eta\nabla_\theta \mathcal{L} \text{ on article–title pairs; input} = \text{article} \\
+          \textbf{zero-shot (C2): } &amp; \theta \text{ unchanged; input} = \text{instruction} \oplus \text{article} \\
+          \textbf{few-shot: } &amp; \theta \text{ unchanged; input} = \text{instruction} \oplus (a_1, t_1) \oplus \cdots \oplus (a_k, t_k) \oplus \text{article}
+        \end{aligned} \]
+        <p class="note">\(\oplus\) means joining text end to end, and \((a_i, t_i)\) is a worked example article with its correct title. In both prompting settings the title is generated as \(\hat{\mathbf{y}} \approx \arg\max_{\mathbf{y}} P_\theta(\mathbf{y} \mid \text{input})\), approximated by beam search. The model learns nothing permanent. Few-shot examples only influence the one generation they appear in.</p>
+      </div>
+      <p><strong>This project tests zero-shot only.</strong> Every C2 input is one instruction followed by one article, with no examples. Few-shot would also have been awkward here. Flan-T5 reads at most 512 tokens, so any worked examples would consume space otherwise used for the article being titled.</p>
+    </section>
+
+    <section>
+      <h2>3. The prompts and generation settings</h2>
+      <div class="example">
+        <div class="row"><span class="who">Prompt 1</span><span>"Summarize the following text into a title: {text}"</span></div>
+        <div class="row"><span class="who">Prompt 2</span><span>"Generate a headline for this article: {text}"</span></div>
+      </div>
+      <p>For each of the 2 models × 2 prompts × 100 test articles, the notebook:</p>
+      <ol>
+        <li>Fills the article text into the prompt, with the instruction first.</li>
+        <li>Tokenizes and truncates to 512 tokens. Truncation removes text from the end, so the instruction always survives and the article's opening is kept.</li>
+        <li>Calls <code>model.generate(max_length=50, num_beams=5, early_stopping=True)</code>, the same beam search as C1 (true log-probabilities, length normalization) with a 50-token cap.</li>
+        <li>Decodes the output pieces back into text.</li>
+      </ol>
+      <div class="callout impl">
+        <span class="box-label">In the notebook · run on the CPU</span>
+        <p>Neither the Flan-T5 models nor their inputs are moved to the GPU (there's no <code>.to("cuda")</code>, unlike C1), so all 400 generations ran on the CPU: 1,521.96 s in total, about 3.8 s per title averaged across both model sizes. That's a property of this notebook, not of the models.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>4. How C2 is scored</h2>
+      <div class="callout impl">
+        <span class="box-label">In the notebook · a different ROUGE wrapper</span>
+        <p>C2 uses HuggingFace's <code>rouge</code> metric, a wrapper around the same <code>rouge_score</code> library as Parts B and C1. By default it does <strong>not</strong> apply the Porter stemmer, and it combines the per-article F-measures into one aggregate (effectively their mean). It also reports ROUGE-Lsum, a variant intended for multi-sentence summaries. For one-line titles it measures essentially the same thing, and the tables here use ROUGE-L.</p>
+      </div>
+      <p><strong>Which direction does the stemmer difference push?</strong> Stemming maps different surface forms, like "reefs" and "reef", to the same stem. Words that were already identical stay identical, so stemming can only turn non-matches into matches, never the reverse. Match counts, LCS lengths, precision and recall can therefore only stay the same or rise:</p>
+      <div class="eq">
+        \[ \text{ROUGE}_{\text{stemmed}} \;\ge\; \text{ROUGE}_{\text{unstemmed}} \]
+        <p class="note">So the C2 scores below, computed without stemming, are no higher than they would be under C1's settings. If anything they understate Flan-T5 relative to C1.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>5. Results</h2>
+      <div class="tbl-wrap">
+      <table>
+        <caption>C2 · zero-shot · 100 test articles</caption>
+        <thead><tr><th>Model · prompt</th><th class="num">ROUGE-1</th><th class="num">ROUGE-2</th><th class="num">ROUGE-L</th></tr></thead>
+        <tbody>
+          <tr><td>Flan-T5-base · prompt 1</td><td class="num">0.6783</td><td class="num">0.4782</td><td class="num">0.6808</td></tr>
+          <tr><td>Flan-T5-base · prompt 2</td><td class="num">0.6325</td><td class="num">0.4610</td><td class="num">0.6317</td></tr>
+          <tr><td>Flan-T5-large · prompt 1</td><td class="num">0.8221</td><td class="num">0.6383</td><td class="num">0.8207</td></tr>
+          <tr class="hi"><td>Flan-T5-large · prompt 2</td><td class="num">0.8728</td><td class="num">0.6452</td><td class="num">0.8745</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <h3>Effect of prompt wording</h3>
+      <p>Two ways to state a change from an old score \(a\) to a new score \(b\). Relative change divides by the starting point. Absolute change is the plain difference in score units, which is not the same as a percentage:</p>
+      <div class="eq">
+        \[ \text{relative} = \frac{b - a}{a}, \qquad \text{absolute} = b - a \]
+        \[ \text{Flan-T5-large, prompt 1} \to 2: \quad \text{ROUGE-1 } \frac{0.8728 - 0.8221}{0.8221} = +6.2\%, \quad \text{ROUGE-L } \frac{0.8745 - 0.8207}{0.8207} = +6.6\%, \quad \text{ROUGE-2 } +1.1\% \]
+        \[ \text{Flan-T5-base, prompt 1} \to 2: \quad \text{ROUGE-1 } \frac{0.6325 - 0.6783}{0.6783} = -6.8\% \]
+        <p class="note">The absolute ROUGE-1 change for the large model is \(+0.051\). By B1's averaging rule, one article going from \(F = 0\) to \(F = 1\) moves the mean by 0.01, so this is roughly five articles' worth of improvement on a 100-article test set. It's a real difference in these results, but a small-sample one.</p>
+      </div>
+      <p>The same rewording <strong>helps</strong> the large model and <strong>hurts</strong> the base model. How much a prompt matters, and in which direction, isn't a fixed property of instruction-tuned models. It interacts with model size.</p>
+      <h3>Effect of model size</h3>
+      <div class="eq">
+        \[ \text{base} \to \text{large, ROUGE-1:} \quad \text{prompt 1: } \frac{0.8221 - 0.6783}{0.6783} = +21\%, \qquad \text{prompt 2: } \frac{0.8728 - 0.6325}{0.6325} = +38\% \]
+        <p class="note">An absolute gain of 0.14 to 0.24, fourteen to twenty-four articles' worth, is the largest and most dependable effect in Part C2.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>6. Zero-shot against fine-tuned</h2>
+      <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Model</th><th>Trained on this data?</th><th>Stemmer in scoring</th><th class="num">ROUGE-L</th></tr></thead>
+        <tbody>
+          <tr><td>T5-small, fine-tuned (C1)</td><td>yes</td><td>on</td><td class="num">0.8626</td></tr>
+          <tr><td>Flan-T5-large, prompt 2 (C2)</td><td>no</td><td>off</td><td class="num">0.8745</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p>The gap is \(0.0119\), a little over one article's worth. Given one test set of 100 articles, one training run and one choice of prompt, the fair reading is that the two are <strong>effectively tied</strong>. And by section 4, if anything, the scoring difference works against Flan-T5.</p>
+      <p><strong>Why a model never trained on this data can do this well:</strong></p>
+      <ul>
+        <li><strong>Scale.</strong> Flan-T5-large has about 13 times T5-small's parameters. Flan-T5-base, with the same instruction tuning at a third of the large model's size, lands far lower (0.63–0.68).</li>
+        <li><strong>Relevant instruction tuning.</strong> Its instruction collection includes many summarization-style tasks, so "summarize into a title" is close to things it has practised.</li>
+        <li><strong>The task is largely extractive.</strong> As noted in C1, a Wikipedia article's first sentence usually names its subject in the title's own words. A capable reader that finds and copies that phrase scores highly without any task-specific training.</li>
+      </ul>
+    </section>
+
+    <div class="recap"><span class="box-label">Carried forward</span>instruction tuning · the precise difference between zero-shot, few-shot and fine-tuning · relative vs. absolute change · stemming can only raise ROUGE · the "one article = 0.01" rule for judging small differences · C2's best score of 0.8745 ROUGE-L.</div>
+  </main>
+  <div class="pager">
+    <a href="06-part-c1-transformer.html"><span class="lbl">Back</span>← Part C1 · Attention and T5</a>
+    <a class="next" href="08-results-and-takeaways.html"><span class="lbl">Next</span>Results and takeaways →</a>
+  </div>
+</div>
+</body>
+</html>

@@ -1,0 +1,507 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Project Deep-Dive · Interview Prep</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;1,9..144,500&family=IBM+Plex+Sans:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.css">
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="qa.css">
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.js"></script>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/contrib/auto-render.min.js"></script>
+<script defer src="render.js"></script>
+</head>
+<body>
+<div class="offline-note">Formulas are typeset by KaTeX, which loads from the internet. Without a connection they show as raw LaTeX.</div>
+<div class="page">
+  <header class="masthead">
+    <div class="crumb"><a href="index.html">Interview prep</a><span class="sep">/</span><span class="here">1 · Project deep-dive</span></div>
+    <span class="stage-tag">25 questions</span>
+    <h1 class="title">Project deep-dive: Wiki-Title-Gen</h1>
+    <p class="dek">The questions an interviewer asks after reading your project bullets, and the follow-ups they ask when an answer sounds rehearsed. Every answer is written in your voice, and every number traces back to your notebooks or report.</p>
+  </header>
+  <main>
+
+    <nav class="qindex" aria-label="Questions on this page">
+      <h2>Questions</h2>
+      <div class="group">The story</div>
+      <ul>
+        <li><a href="#q1"><span class="qn">Q1</span>Walk me through the project</a></li>
+        <li><a href="#q2"><span class="qn">Q2</span>Data splits and leakage</a></li>
+      </ul>
+      <div class="group">Preprocessing</div>
+      <ul>
+        <li><a href="#q3"><span class="qn">Q3</span>Clean text for the RNN, raw for T5?</a></li>
+        <li><a href="#q4"><span class="qn">Q4</span>How preprocessing got 3.8× faster</a></li>
+      </ul>
+      <div class="group">RNN baselines</div>
+      <ul>
+        <li><a href="#q5"><span class="qn">Q5</span>Your GRU encoder–decoder</a></li>
+        <li><a href="#q6"><span class="qn">Q6</span>Teacher forcing and its catch</a></li>
+        <li><a href="#q7"><span class="qn">Q7</span>GRU vs. vanilla RNN vs. LSTM</a></li>
+        <li><a href="#q8"><span class="qn">Q8</span>What the ablation showed</a></li>
+        <li><a href="#q9"><span class="qn">Q9</span>Why freeze GloVe?</a></li>
+        <li><a href="#q10"><span class="qn">Q10</span>Beam search: was it worth it?</a></li>
+        <li><a href="#q11"><span class="qn">Q11</span>Why the basic RNN scored 0.25</a></li>
+        <li><a href="#q12"><span class="qn">Q12</span>Mixed precision and the 20%</a></li>
+        <li><a href="#q13"><span class="qn">Q13</span>A hard bug you fixed</a></li>
+      </ul>
+      <div class="group">Fine-tuning T5</div>
+      <ul>
+        <li><a href="#q14"><span class="qn">Q14</span>Why T5, and why small?</a></li>
+        <li><a href="#q15"><span class="qn">Q15</span>Your fine-tuning configuration</a></li>
+        <li><a href="#q16"><span class="qn">Q16</span>Was it overfitting?</a></li>
+        <li><a href="#q17"><span class="qn">Q17</span>Why T5 beat the RNNs</a></li>
+        <li><a href="#q18"><span class="qn">Q18</span>The 512-token limit</a></li>
+      </ul>
+      <div class="group">Prompting Flan-T5</div>
+      <ul>
+        <li><a href="#q19"><span class="qn">Q19</span>Zero-shot, few-shot, fine-tuning</a></li>
+        <li><a href="#q20"><span class="qn">Q20</span>How zero-shot matched fine-tuning</a></li>
+        <li><a href="#q21"><span class="qn">Q21</span>Is the 6.6% prompt lift real?</a></li>
+        <li><a href="#q22"><span class="qn">Q22</span>Which model would you deploy?</a></li>
+      </ul>
+      <div class="group">Evaluation and next steps</div>
+      <ul>
+        <li><a href="#q23"><span class="qn">Q23</span>How ROUGE works, and fails</a></li>
+        <li><a href="#q24"><span class="qn">Q24</span>Are your scores comparable?</a></li>
+        <li><a href="#q25"><span class="qn">Q25</span>What you'd do differently</a></li>
+      </ul>
+    </nav>
+
+    <!-- ============ THE STORY ============ -->
+    <section class="qa-section">
+      <h2>The story</h2>
+
+      <article class="qa" id="q1">
+        <div class="qa-id">Q1</div>
+        <h3 class="q">Walk me through this project.</h3>
+        <p class="tests"><span class="box-label">Tests</span>Can you tell a structured two-minute story: problem, approach, result, lesson?</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+          <p>The task was to generate the title of a Wikipedia article from its body text, which is really an extreme form of summarization. I had about 13,900 training articles and a separate 100-article test set, and I scored everything with ROUGE, the standard overlap metric for summaries.</p>
+          <p>I worked in three stages. First, I built baselines from scratch in PyTorch: a bidirectional GRU encoder and a GRU decoder trained with teacher forcing. I then ran an ablation adding GloVe embeddings, a hierarchical encoder, a two-GRU decoder and beam search. Second, I fine-tuned T5-small with Hugging Face's Seq2SeqTrainer, which reached 0.86 ROUGE-L. Third, I tested zero-shot prompting on Flan-T5-base and Flan-T5-large with two prompt wordings. Flan-T5-large reached 0.87 without any training.</p>
+          <p>Two lessons came out of it. Pretrained knowledge mattered far more than architecture: GloVe was the only RNN change that clearly helped, and both pretrained Transformers beat every RNN by a wide margin. And measurement matters. With 100 test articles, 0.86 versus 0.87 is about one article's worth of difference, so I treat the fine-tuned and zero-shot models as tied.</p>
+        </div>
+        <div class="followup">
+          <span class="box-label">Likely follow-up</span>
+          <p><strong>"What was your specific contribution?"</strong> It was an individual course assignment, so all of it: the preprocessing pipeline, the PyTorch model classes, the training and evaluation loops, the T5 fine-tuning setup, the prompting experiments, and the write-up.</p>
+        </div>
+      </article>
+
+      <article class="qa" id="q2">
+        <div class="qa-id">Q2</div>
+        <h3 class="q">How did you split the data, and how did you make sure test data didn't leak into training?</h3>
+        <p class="tests"><span class="box-label">Tests</span>Basic experimental hygiene: do you know what each split is for?</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+          <p>There were two files: 13,879 training articles and 100 test articles. For the basic RNN and for T5, I held out the last 500 training articles as a validation set. For T5, validation loss was computed after every epoch. The test set was used only once per model, to report final ROUGE. It was never used for training, tuning or early stopping.</p>
+          <p>One thing I'd do differently: the four RNN ablation runs trained on all 13,879 articles without using the validation split. That doesn't leak test data, but it means those runs weren't tuned on validation at all. I also picked the better Flan-T5 prompt by comparing test scores, which I'd move onto a validation set next time.</p>
+        </div>
+        <p class="review">Review: <a href="../explanations/03-part-a-preprocessing.html">Part A</a> · <a href="../explanations/07-part-c2-prompting.html">Part C2</a></p>
+      </article>
+    </section>
+
+    <!-- ============ PREPROCESSING ============ -->
+    <section class="qa-section">
+      <h2>Preprocessing</h2>
+
+      <article class="qa" id="q3">
+        <div class="qa-id">Q3</div>
+        <h3 class="q">Why did you lemmatize and remove stopwords for the RNN, but feed raw text to T5?</h3>
+        <p class="tests"><span class="box-label">Tests</span>Do you understand that preprocessing depends on the model, not a fixed checklist?</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+          <p>The RNN used a whole-word vocabulary that I built myself, capped to words appearing in at least 1% of articles. For that model, cleaning pays off three ways. Lemmatization merges "reef" and "reefs" into one vocabulary entry, so limited data isn't split across word forms. Stopword removal shortens sequences, which gives the GRU a shorter path to carry gradients through. And a smaller vocabulary means smaller embedding and output layers.</p>
+          <p>T5 is the opposite case. It was pretrained on natural text with its own subword tokenizer, so cleaning would feed it text unlike anything it had seen and throw away useful signal such as capitalized names. The assignment also required raw text for that part.</p>
+          <p>The trade-off is that the RNN's target titles were cleaned too: lowercase lemmas with stopwords removed. So RNN and T5 scores aren't measured against identical references.</p>
+        </div>
+        <p class="review">Review: <a href="../explanations/03-part-a-preprocessing.html">Part A</a> · <a href="../explanations/06-part-c1-transformer.html">Part C1, section 1</a></p>
+      </article>
+
+      <article class="qa" id="q4">
+        <div class="qa-id">Q4</div>
+        <h3 class="q">You cut preprocessing time 3.8×. How?</h3>
+        <p class="tests"><span class="box-label">Tests</span>Is the number real, and do you understand <em>why</em> it got faster?</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+          <p>I used spaCy instead of NLTK, because its pipeline is implemented in Cython and built for large-scale processing. Two changes then made the difference:</p>
+          <ul>
+            <li><strong>Batching.</strong> <code>nlp.pipe(texts, batch_size=50)</code> streams documents through the pipeline 50 at a time, so the model computations run once per batch instead of once per document.</li>
+            <li><strong>Disabling unused components.</strong> I only needed lemmas and stopword flags, so I turned off the dependency parser and named-entity recognizer.</li>
+          </ul>
+          <p>The first approach took roughly an hour for the 13,879 articles. The batched version ran at 14.6 articles per second, finishing in 15 minutes 49 seconds. I saved the cleaned text to CSV so later experiments didn't repeat the step.</p>
+        </div>
+        <div class="followup">
+          <span class="box-label">Likely follow-up</span>
+          <p><strong>"How would you speed it up further?"</strong> Use spaCy's <code>n_process</code> to spread batches across CPU cores, which helps because this is CPU-bound work. Deduplicate texts before processing. And if lemmas were all I needed, use a lighter rule-based lemmatizer and skip the statistical tagger.</p>
+        </div>
+      </article>
+    </section>
+
+    <!-- ============ RNN BASELINES ============ -->
+    <section class="qa-section">
+      <h2>RNN baselines</h2>
+
+      <article class="qa" id="q5">
+        <div class="qa-id">Q5</div>
+        <h3 class="q">Describe the architecture of your GRU encoder–decoder.</h3>
+        <p class="tests"><span class="box-label">Tests</span>Do you know your own model concretely: sizes, shapes, loss, optimizer?</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+          <p>The <strong>encoder</strong> embeds each word into 300 dimensions, applies dropout of 0.3, and runs a bidirectional GRU with 300 units per direction. I concatenate the final forward and backward states into a 600-dimensional summary, and a linear layer projects that down to 300 to initialize the decoder.</p>
+          <p>The <strong>decoder</strong> takes the previous word, embeds it, applies a ReLU, runs one GRU step, and a linear layer maps the 300-dimensional state to logits over the 9,215-word vocabulary. Training uses cross-entropy with padding positions ignored, and teacher forcing.</p>
+          <p>I trained with Adam at learning rate 0.001, batch size 8, three epochs, gradient clipping at 1.0, and fp16 mixed precision through Hugging Face Accelerate. The model has about 10.1 million parameters. More than half sit in the three vocabulary-sized layers: two embedding tables and the output layer.</p>
+        </div>
+        <div class="followup">
+          <span class="box-label">Likely follow-up</span>
+          <p><strong>"Why project 600 down to 300?"</strong> The decoder GRU's hidden size is 300, so the bidirectional summary had to be mapped to that size. Alternatives would be a 600-unit decoder, or averaging the two directions instead of learning a projection.</p>
+        </div>
+        <p class="review">Review: <a href="../explanations/04-part-b1-basic-rnn.html">Part B1, section 2</a></p>
+      </article>
+
+      <article class="qa" id="q6">
+        <div class="qa-id">Q6</div>
+        <h3 class="q">What is teacher forcing, and what's the downside?</h3>
+        <p class="tests"><span class="box-label">Tests</span>Understanding the difference between training and inference in sequence generation.</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+          <p>During training, the decoder is fed the <em>correct</em> previous word from the reference title at every step, instead of its own prediction. That keeps one early mistake from corrupting the learning signal for every later position, so training is faster and more stable.</p>
+          <p>The downside is <strong>exposure bias</strong>. At inference there's no reference, so the model has to continue from its own predictions, a situation it never practised during training, and errors can compound. Mitigations include scheduled sampling, which gradually replaces true tokens with the model's own predictions during training, and search methods like beam search at inference. Transformers still train with teacher forcing, but a causal mask lets them compute every position in one parallel pass.</p>
+        </div>
+        <p class="review">Review: <a href="../explanations/02-sequence-models.html">page 2, section 12</a></p>
+      </article>
+
+      <article class="qa" id="q7">
+        <div class="qa-id">Q7</div>
+        <h3 class="q">Why a GRU, and not a vanilla RNN or an LSTM?</h3>
+        <p class="tests"><span class="box-label">Tests</span>Vanishing gradients, and gated-cell trade-offs.</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+          <p>The assignment specified GRUs, but it's a sensible choice. A vanilla RNN multiplies the gradient by a similar factor at every time step. Over hundreds of words, factors below 1 shrink it towards zero, so the model can't learn long-range dependencies. The GRU's update gate gives the old state a nearly direct path forward when the gate is close to 1, which keeps gradients alive.</p>
+          <p>Compared with an LSTM: an LSTM keeps a separate cell state and uses three gates plus a candidate, so four weight blocks. A GRU has two gates plus a candidate, so three. At my sizes that's 541,800 parameters per GRU layer versus 722,400 for an LSTM, about 25% fewer. GRUs train faster and usually perform comparably, and an LSTM tends to help mainly on very long or complex dependencies.</p>
+        </div>
+        <p class="review">Review: <a href="../explanations/02-sequence-models.html">page 2, sections 8–9</a></p>
+      </article>
+
+      <article class="qa" id="q8">
+        <div class="qa-id">Q8</div>
+        <h3 class="q">You ran an ablation on the RNN. What helped, what didn't, and why?</h3>
+        <p class="tests"><span class="box-label">Tests</span>Can you interpret experimental results honestly, including negative ones?</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+          <p>I added four components cumulatively: GloVe embeddings, then a hierarchical encoder, then a two-GRU decoder, then beam search.</p>
+          <ul>
+            <li><strong>GloVe helped clearly.</strong> Training loss was lower at every epoch (final 1.30 versus 1.55), and it had the best test ROUGE of any RNN variant.</li>
+            <li><strong>The hierarchical encoder hurt.</strong> ROUGE-L fell from 0.50 to 0.33, and training loss rose to 3.12, so the model couldn't even fit its training data. The cause was my implementation. Preprocessing had already removed punctuation, so there were no sentence boundaries left, and the encoder ended up averaging the word states over the entire padded article. The decoder received one diluted vector.</li>
+            <li><strong>The two-GRU decoder and beam search</strong> changed ROUGE by about 0.02 in single runs. That's too small to separate from run-to-run noise.</li>
+          </ul>
+          <p>The takeaway was that a component only helps if it gives the decoder more usable information. To test the hierarchical idea properly, I'd split sentences before removing punctuation and exclude padding from the averages.</p>
+        </div>
+        <div class="callout impl">
+          <span class="box-label">Be careful</span>
+          <p>Don't say "GloVe doubled ROUGE" (0.25 → 0.50). The B2 evaluation code also started cutting generated titles to the reference length, and B1's didn't, so part of that jump comes from the evaluation change. Cite the training-loss drop as the evidence that GloVe helped.</p>
+        </div>
+        <div class="followup">
+          <span class="box-label">Likely follow-up</span>
+          <p><strong>"Why cumulative instead of one at a time?"</strong> It was quicker to set up, but it means each component is measured on top of the previous ones, and the hierarchical encoder's problem carried into every later run. Adding each component individually on top of the GloVe model, with several random seeds, would give a cleaner answer.</p>
+        </div>
+        <p class="review">Review: <a href="../explanations/05-part-b2-improvements.html">Part B2</a></p>
+      </article>
+
+      <article class="qa" id="q9">
+        <div class="qa-id">Q9</div>
+        <h3 class="q">Why did you freeze the GloVe embeddings instead of fine-tuning them?</h3>
+        <p class="tests"><span class="box-label">Tests</span>Transfer learning trade-offs on small data.</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+          <p>With only about 13,900 articles, updating 2.77 million embedding parameters risks overfitting. Words that appear in training would drift away from their general-purpose meanings while rarer words stayed put, damaging exactly the structure GloVe provides. Freezing keeps similar words close together, cuts the trainable parameter count, and speeds up training.</p>
+          <p>The cost is that words missing from GloVe keep their random starting vectors permanently, and no word can adapt to how this corpus uses it. A common middle ground is to train with embeddings frozen first, then unfreeze them with a small learning rate. Only the encoder used GloVe; the decoder's embeddings were still trained from scratch.</p>
+        </div>
+      </article>
+
+      <article class="qa" id="q10">
+        <div class="qa-id">Q10</div>
+        <h3 class="q">How does beam search work, and was it worth it in your project?</h3>
+        <p class="tests"><span class="box-label">Tests</span>Decoding algorithms, and whether you measure cost as well as quality.</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+          <p>Greedy decoding takes the single most likely word at each step, which can miss a better overall sequence. Beam search keeps the top <em>k</em> partial sequences, 5 in my case, ranked by total log-probability. At each step it extends all of them, keeps the best five overall, and at the end returns the highest-scoring complete sequence.</p>
+          <p>For my RNN it wasn't worth it. Evaluating the 100 test articles went from 1.19 seconds to 6.85 seconds, about 5.8× slower, and ROUGE didn't improve measurably. I also found two flaws in my implementation: it ranked beams by raw logits rather than log-softmax probabilities, which distorts comparisons between different beams, and it had no length normalization. Hugging Face's <code>generate</code>, which I used for T5, gets both right by default.</p>
+        </div>
+        <div class="followup">
+          <span class="box-label">Likely follow-up</span>
+          <p><strong>"When is beam search worth the cost?"</strong> When the model is reasonably well calibrated and the output has to be precise and faithful, as in translation or summarization, and when beams can be run in parallel on a GPU. For short, mostly extractive titles, greedy decoding from a strong model is often nearly as good.</p>
+        </div>
+        <p class="review">Review: <a href="../explanations/05-part-b2-improvements.html">Part B2, upgrade 4</a></p>
+      </article>
+
+      <article class="qa" id="q11">
+        <div class="qa-id">Q11</div>
+        <h3 class="q">Your basic RNN only got 0.25 ROUGE-1. Why so low?</h3>
+        <p class="tests"><span class="box-label">Tests</span>Can you diagnose a weak model using evidence, rather than just calling it "too simple"?</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+          <p>I traced it to four causes.</p>
+          <ol>
+            <li><strong>It never learned to stop.</strong> The training titles had no end-of-sequence token, so the model always generated the 10-token maximum. That caps precision: if a reference has 3 words and the model finds all 3 among 10 generated words, the best possible F1 is 0.46. The word-level numbers show exactly this, with recall at 0.69 and precision at 0.40.</li>
+            <li><strong>Random embeddings.</strong> Three epochs isn't much time to learn what 9,000 words mean.</li>
+            <li><strong>Unknown words.</strong> Titles are full of names, and names often fall below the 1% vocabulary threshold, so they became <code>&lt;UNK&gt;</code>.</li>
+            <li><strong>The bottleneck.</strong> The whole article had to fit into one fixed-size vector, and the decoder couldn't look back at specific words.</li>
+          </ol>
+          <p>T5 addressed all four: its tokenizer adds an end token, it's pretrained, subword tokens spell out any name, and cross-attention lets the decoder read every article position.</p>
+        </div>
+        <p class="review">Review: <a href="../explanations/04-part-b1-basic-rnn.html">Part B1, section 7</a></p>
+      </article>
+
+      <article class="qa" id="q12">
+        <div class="qa-id">Q12</div>
+        <h3 class="q">What does mixed precision do, and how did you measure the 20% speed-up?</h3>
+        <p class="tests"><span class="box-label">Tests</span>GPU training fundamentals, and whether you can back a number you put on your CV.</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+          <p>Mixed precision runs most matrix operations in 16-bit floats instead of 32-bit. That roughly halves activation memory and uses faster GPU kernels, while the master weights stay in 32-bit. The risk is that very small gradients round to zero in 16-bit, so the loss is multiplied by a scale factor before backpropagation and the gradients are divided by it again before the optimizer step. If a scaled gradient overflows, that step is skipped and the scale is reduced. Hugging Face Accelerate handled all of this, plus device placement, with <code>mixed_precision="fp16"</code>.</p>
+          <p>I measured it by comparing wall-clock time per epoch for the same RNN configuration with and without fp16, and saw roughly a 20% reduction.</p>
+        </div>
+        <div class="callout impl">
+          <span class="box-label">Be careful</span>
+          <p>Your report states the ~20% figure, but the notebook only contains fp16 runs, so the fp32 comparison run isn't there. Use the second paragraph only if it matches how you actually timed it, and be ready to say roughly what the epoch times were. If you can't reconstruct it, say "roughly 20% in my runs" and don't claim more precision.</p>
+        </div>
+        <div class="followup">
+          <span class="box-label">Likely follow-up</span>
+          <p><strong>"Why only 20% and not 2×?"</strong> The decoder ran one time step at a time in a Python loop, so a lot of the time went to Python overhead and small GPU calls rather than big matrix multiplications, and only the latter get faster in fp16. Transformers, which process whole sequences in large parallel operations, typically benefit more.</p>
+        </div>
+      </article>
+
+      <article class="qa" id="q13">
+        <div class="qa-id">Q13</div>
+        <h3 class="q">Tell me about a hard technical problem you hit and how you solved it.</h3>
+        <p class="tests"><span class="box-label">Tests</span>Debugging process: isolate, understand, fix, prevent.</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+          <p>When I added beam search, evaluation started crashing intermittently. The cause was that different decoding paths returned different tensor shapes. Greedy decoding returned logits shaped batch × length × vocabulary. Beam search returned token IDs shaped batch × length. And some configurations, including beam width 1, came back one-dimensional.</p>
+          <p>I isolated it by running each decoding mode on the same small batch and printing output shapes. The fix was a single normalization step at the start of evaluation: explicit dimension checks that add a missing batch dimension and take the argmax only when a vocabulary dimension is present, so every path hands the scoring code the same batch × length tensor.</p>
+          <p>The lesson was to define one output contract for all decoding modes and test it directly. For example, beam search with width 1 should produce the same output as greedy decoding.</p>
+        </div>
+        <div class="followup">
+          <span class="box-label">Second example if asked</span>
+          <p>Early on, manual <code>.to(device)</code> calls caused device mismatches and GPU memory overflows. I removed them and let Accelerate place the model, optimizer and data loaders, which fixed both problems and lowered evaluation memory use.</p>
+        </div>
+      </article>
+    </section>
+
+    <!-- ============ T5 ============ -->
+    <section class="qa-section">
+      <h2>Fine-tuning T5</h2>
+
+      <article class="qa" id="q14">
+        <div class="qa-id">Q14</div>
+        <h3 class="q">Why T5, and why the small version?</h3>
+        <p class="tests"><span class="box-label">Tests</span>Model-selection reasoning.</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+          <p>The assignment specified T5-small, but it fits the problem well. T5 is an encoder–decoder: the encoder reads the whole article bidirectionally and the decoder generates the title while attending to it. That's the natural shape for input-to-output text tasks. It was also pretrained on a mix that included summarization-style tasks.</p>
+          <p>The small version has about 60 million parameters, so with 512-token inputs it fit a Kaggle GPU at batch size 8, and three epochs of fine-tuning took about 18 minutes. T5-base or BART would likely score somewhat higher at several times the compute. An encoder-only model like BERT can't generate text on its own. A decoder-only model could do it with prompting, but at this scale an encoder–decoder is the more direct fit.</p>
+        </div>
+      </article>
+
+      <article class="qa" id="q15">
+        <div class="qa-id">Q15</div>
+        <h3 class="q">Walk me through your fine-tuning configuration.</h3>
+        <p class="tests"><span class="box-label">Tests</span>Whether you understand each hyperparameter, not just the values.</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+          <ul>
+            <li><strong>Data:</strong> 13,379 training and 500 validation articles, tokenized with T5's tokenizer. Inputs were truncated to 512 tokens, titles to 64.</li>
+            <li><strong>Optimizer:</strong> AdamW with weight decay 0.01, and learning rate 2e-5 decaying linearly to zero. The rate is small because fine-tuning should nudge pretrained weights, not overwrite them.</li>
+            <li><strong>Batching:</strong> 8 articles per GPU. The logged 2,511 steps over three epochs work out to 16 articles per step, so the Kaggle session ran on two GPUs.</li>
+            <li><strong>Monitoring:</strong> validation loss every epoch, TensorBoard logging every 100 steps, and <code>predict_with_generate</code> so evaluation used generated sequences.</li>
+            <li><strong>Generation:</strong> beam search with 5 beams and early stopping.</li>
+          </ul>
+        </div>
+        <div class="followup">
+          <span class="box-label">Likely follow-up</span>
+          <p><strong>"What would you tune first?"</strong> The learning rate, since T5 fine-tuning often uses rates several times higher than 2e-5, and the number of epochs, since validation loss was still falling. I'd select both on validation ROUGE rather than loss. Then beam width and length penalty, which I left at defaults.</p>
+        </div>
+        <p class="review">Review: <a href="../explanations/06-part-c1-transformer.html">Part C1, section 8</a></p>
+      </article>
+
+      <article class="qa" id="q16">
+        <div class="qa-id">Q16</div>
+        <h3 class="q">How do you know the fine-tuned model wasn't overfitting?</h3>
+        <p class="tests"><span class="box-label">Tests</span>Reading learning curves, and noticing measurement quirks.</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+          <p>Validation loss went down every epoch, 0.053, then 0.043, then 0.041, alongside training loss. Overfitting shows up as validation loss turning upward while training loss keeps falling, and that never happened. If anything the model was slightly under-trained.</p>
+          <p>One caveat: the absolute loss values look tiny because I didn't mask the padded label positions. Most of the 64 label slots are padding, which is trivially easy to predict. The downward trend is still meaningful, but a better check would be validation ROUGE each epoch, with early stopping on it.</p>
+        </div>
+      </article>
+
+      <article class="qa" id="q17">
+        <div class="qa-id">Q17</div>
+        <h3 class="q">T5 beat your best RNN by a huge margin. Why?</h3>
+        <p class="tests"><span class="box-label">Tests</span>Understanding <em>what</em> pretrained Transformers bring, beyond "they're better".</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+          <p>Four concrete reasons, each matching a weakness I found in the RNN:</p>
+          <ol>
+            <li>It's <strong>pretrained</strong>, so it already knew language and only had to learn the task.</li>
+            <li>It uses <strong>subword tokenization</strong>, so rare names are spelled out in pieces instead of becoming unknown tokens.</li>
+            <li><strong>Cross-attention</strong> lets the decoder look at any article position at every step, instead of relying on one compressed summary vector.</li>
+            <li>Its tokenizer appends an <strong>end-of-sequence token</strong> to every title, so it learned when to stop.</li>
+          </ol>
+          <p>The data helps too: a Wikipedia article's first sentence usually names its subject in the title's own words, so a model that can attend to that sentence and copy it can score very highly. I'd add one caveat: the RNN was scored against cleaned titles and T5 against raw ones, so the numbers aren't strictly comparable. But a gap from 0.50 to 0.86 is far bigger than that difference could explain.</p>
+        </div>
+      </article>
+
+      <article class="qa" id="q18">
+        <div class="qa-id">Q18</div>
+        <h3 class="q">T5 only reads 512 tokens. What did that cost you, and how would you handle long documents?</h3>
+        <p class="tests"><span class="box-label">Tests</span>Transformer limitations, and practical system design.</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+          <p>For Wikipedia it cost very little, because the key information is at the start and truncation keeps the start. The limit exists because self-attention compares every token with every other token, so memory and compute grow with the square of the sequence length.</p>
+          <p>For long documents where the important content can be anywhere, like financial reports or call transcripts, I'd consider:</p>
+          <ul>
+            <li><strong>Extract then abstract:</strong> select the most relevant sentences first, then summarize those.</li>
+            <li><strong>Map-reduce summarization:</strong> summarize each chunk, then summarize the summaries.</li>
+            <li><strong>Long-context models:</strong> models with efficient attention, such as LongT5 or LED.</li>
+          </ul>
+        </div>
+      </article>
+    </section>
+
+    <!-- ============ FLAN-T5 ============ -->
+    <section class="qa-section">
+      <h2>Prompting Flan-T5</h2>
+
+      <article class="qa" id="q19">
+        <div class="qa-id">Q19</div>
+        <h3 class="q">What's the difference between zero-shot, few-shot and fine-tuning? Which did you use?</h3>
+        <p class="tests"><span class="box-label">Tests</span>Precise terminology. Interviewers notice when these get blurred.</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+          <p><strong>Fine-tuning</strong> updates the model's weights on labeled examples, which is what I did with T5-small. <strong>Zero-shot</strong> leaves the weights unchanged and gives the model only an instruction plus the input. <strong>Few-shot</strong> also leaves the weights unchanged, but puts a few solved examples into the prompt before the new input.</p>
+          <p>For Flan-T5 I used <strong>zero-shot only</strong>: two prompt wordings on two model sizes. Few-shot would have been awkward here because Flan-T5 reads at most 512 tokens, so example articles would consume space otherwise available for the article being titled. It would be a sensible next experiment using short lead paragraphs as the examples.</p>
+        </div>
+        <p class="review">Review: <a href="../explanations/07-part-c2-prompting.html">Part C2, section 2</a></p>
+      </article>
+
+      <article class="qa" id="q20">
+        <div class="qa-id">Q20</div>
+        <h3 class="q">How could a model with no training on your data match your fine-tuned model?</h3>
+        <p class="tests"><span class="box-label">Tests</span>Understanding scale, instruction tuning, and the nature of the task.</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+          <p>Three reasons.</p>
+          <ul>
+            <li><strong>Scale.</strong> Flan-T5-large has about 780 million parameters, roughly 13 times T5-small. Flan-T5-base, with the same training at a third of the size, only reached 0.63–0.68.</li>
+            <li><strong>Instruction tuning.</strong> Flan-T5 was fine-tuned on roughly 1,800 tasks phrased as instructions, including summarization, so "turn this into a title" is close to things it has practised.</li>
+            <li><strong>The task is largely extractive.</strong> The title is usually in the first sentence, and a strong reader can find and copy it.</li>
+          </ul>
+          <p>I'd also be careful with the framing: 0.8745 versus 0.8626 ROUGE-L is about one article's worth of difference on 100 articles, so I'd call them tied rather than say zero-shot won. If anything the scoring favoured T5-small, because Flan-T5 was scored without stemming, which can only lower ROUGE.</p>
+        </div>
+      </article>
+
+      <article class="qa" id="q21">
+        <div class="qa-id">Q21</div>
+        <h3 class="q">You say rewording the prompt lifted ROUGE-L by 6.6%. Is that real?</h3>
+        <p class="tests"><span class="box-label">Tests</span>Statistical skepticism about your own results. This is a favourite at banks.</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+          <p>It's real in my results, but I'd qualify it. It's a <em>relative</em> change: ROUGE-L went from 0.821 to 0.875, which is 0.054 in absolute terms. Each score is an average over 100 articles, so one article going from zero to perfect overlap moves the average by 0.01, and this difference is roughly five articles' worth.</p>
+          <p>Two things make me cautious. The same rewording made Flan-T5-base <em>worse</em>, by about 7%. And I chose the better prompt by comparing test scores, which slightly inflates the reported best number. To trust the effect, I'd pick prompts on a validation set, test more wordings, use a larger test set, and put a paired bootstrap confidence interval on the per-article score differences.</p>
+        </div>
+        <div class="callout impl">
+          <span class="box-label">Be careful</span>
+          <p>The 6.6% is the ROUGE-L figure. The ROUGE-1 lift is 6.2%. Quote the one that matches the metric you name.</p>
+        </div>
+        <p class="review">Review: <a href="../explanations/07-part-c2-prompting.html">Part C2, section 5</a></p>
+      </article>
+
+      <article class="qa" id="q22">
+        <div class="qa-id">Q22</div>
+        <h3 class="q">If you had to deploy one, fine-tuned T5-small or zero-shot Flan-T5-large, which would you pick?</h3>
+        <p class="tests"><span class="box-label">Tests</span>Business judgement: cost, latency, maintenance, not just accuracy.</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+          <p>Quality was effectively tied, so the decision comes down to operating cost and flexibility.</p>
+          <ul>
+            <li><strong>T5-small</strong> is about 13× smaller, so it's much cheaper and faster per request, and simpler to serve. But it needs labeled data and retraining whenever the domain changes.</li>
+            <li><strong>Flan-T5-large</strong> works on day one without labels and can be adapted by changing the prompt, but every request costs far more compute.</li>
+          </ul>
+          <p>For a high-volume, stable task, such as titling millions of internal documents, I'd deploy T5-small, possibly quantized. For low volume, or a new task with no labeled data yet, I'd start with Flan-T5 and collect data to fine-tune later. Either way, I'd benchmark latency and cost on the real serving hardware first. I didn't measure inference latency in this project.</p>
+        </div>
+      </article>
+    </section>
+
+    <!-- ============ EVALUATION ============ -->
+    <section class="qa-section">
+      <h2>Evaluation and next steps</h2>
+
+      <article class="qa" id="q23">
+        <div class="qa-id">Q23</div>
+        <h3 class="q">How does ROUGE work, and where does it fall short?</h3>
+        <p class="tests"><span class="box-label">Tests</span>Metric literacy: definitions plus limitations.</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+          <p>ROUGE compares a generated text with a reference by counting overlapping units. ROUGE-1 counts overlapping single words and ROUGE-2 overlapping word pairs, with each word's matches capped at how often it appears in the reference. ROUGE-L uses the longest common subsequence, which rewards words appearing in the right order even with gaps. For each variant, precision and recall are combined into an F1:</p>
+          \[ P = \frac{\text{matches}}{\text{generated length}}, \qquad R = \frac{\text{matches}}{\text{reference length}}, \qquad F_1 = \frac{2PR}{P+R} \]
+          <p>Its weaknesses:</p>
+          <ul>
+            <li>It measures surface overlap, so a correct paraphrase like "automobile" for "car" scores zero.</li>
+            <li>It doesn't check facts: a title with one wrong name can still score highly.</li>
+            <li>It favours extractive outputs.</li>
+            <li>Settings like stemming change the numbers.</li>
+          </ul>
+          <p>I'd complement it with BERTScore for semantic similarity, a factual-consistency check, and a small human evaluation.</p>
+        </div>
+        <p class="review">Review: <a href="../explanations/04-part-b1-basic-rnn.html">Part B1, section 5</a></p>
+      </article>
+
+      <article class="qa" id="q24">
+        <div class="qa-id">Q24</div>
+        <h3 class="q">Are your RNN and Transformer scores directly comparable?</h3>
+        <p class="tests"><span class="box-label">Tests</span>Rigor. The strongest candidates raise this before being asked.</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+          <p>Not strictly. There are five differences:</p>
+          <ol>
+            <li>The RNNs were scored against cleaned, lemmatized titles, and the Transformers against raw titles.</li>
+            <li>The basic RNN and the ablation runs used different evaluation code; the ablation runs cut outputs to the reference length.</li>
+            <li>T5 was scored with stemming and Flan-T5 without.</li>
+            <li>Every configuration was trained once.</li>
+            <li>The test set is 100 articles, so one article equals 0.01 of the average.</li>
+          </ol>
+          <p>So I trust the large gaps (RNN versus Transformer, Flan-T5-base versus large, GloVe versus the hierarchical encoder) and don't draw conclusions from small ones (T5 versus Flan-T5-large, the two-GRU decoder versus beam search). Next time I'd use one evaluation pipeline, raw references everywhere, and bootstrap confidence intervals.</p>
+        </div>
+        <p class="review">Review: <a href="../explanations/08-results-and-takeaways.html">Results, "Which comparisons are fair"</a></p>
+      </article>
+
+      <article class="qa" id="q25">
+        <div class="qa-id">Q25</div>
+        <h3 class="q">What would you do differently with more time?</h3>
+        <p class="tests"><span class="box-label">Tests</span>Self-critique and prioritization.</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+          <p>In priority order:</p>
+          <ol>
+            <li><strong>One evaluation pipeline</strong> for every model: same references, same stemming, per-article scores saved, and bootstrap confidence intervals.</li>
+            <li><strong>Fix the RNN's known issues.</strong> Add an end token to training titles, split sentences before cleaning so the hierarchical encoder works as designed, and rank beams by log-probabilities.</li>
+            <li><strong>Cleaner ablations:</strong> each component added individually, with several random seeds.</li>
+            <li><strong>Tune T5 on validation ROUGE,</strong> mask padded labels, and train longer, since validation loss was still falling.</li>
+            <li><strong>Try stronger adaptation:</strong> T5-base or BART, parameter-efficient fine-tuning (LoRA) on Flan-T5-large, and few-shot prompting, then compare quality against latency and cost.</li>
+          </ol>
+        </div>
+      </article>
+    </section>
+
+  </main>
+  <div class="pager">
+    <a href="index.html"><span class="lbl">Back</span>← Contents</a>
+    <a class="next" href="02-ml-nlp-fundamentals.html"><span class="lbl">Next</span>2 · ML and NLP fundamentals →</a>
+  </div>
+</div>
+</body>
+</html>

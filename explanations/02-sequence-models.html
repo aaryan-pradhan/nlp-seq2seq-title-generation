@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Sequence Models · From Article to Headline</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;1,9..144,500&family=IBM+Plex+Sans:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.css">
+<link rel="stylesheet" href="style.css">
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.js"></script>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/contrib/auto-render.min.js"></script>
+<script defer src="render.js"></script>
+</head>
+<body>
+<div class="offline-note">Formulas are typeset by KaTeX, which loads from the internet. Without a connection they show as raw LaTeX.</div>
+<div class="page">
+  <header class="masthead">
+    <div class="crumb"><a href="index.html">Explanations</a><span class="sep">/</span><span class="here">2 · Sequence models</span></div>
+    <span class="stage-tag">Prerequisite 2 of 2</span>
+    <h1 class="title">Sequence models</h1>
+    <p class="dek">How text becomes numbers, how a network assigns probabilities to words, and how a recurrent encoder–decoder reads one sequence and writes another.</p>
+  </header>
+  <main>
+
+    <div class="recap"><span class="box-label">Uses</span>linear layers, sigmoid/tanh derivatives, loss, gradient descent, backpropagation as a product of factors, and mini-batches, all from <a href="01-neural-network-basics.html">page 1</a>.</div>
+
+    <div class="spec-quote">
+      <span class="box-label">assignment_spec.pdf · Overview</span>
+      <blockquote>"Specifically, we shall train a Sequence to Sequence (Seq2seq) model that encodes an input sequence of tokens and then generates a desired sequence of tokens, using Recurrent Neural Networks (RNN) and Transformers."</blockquote>
+    </div>
+    <p>That sentence contains four ideas this page unpacks in order: <strong>tokens</strong>, <strong>encoding</strong> a sequence, <strong>generating</strong> a sequence, and <strong>recurrent networks</strong>. Transformers get their own page (Part C1), once the RNN's limits are clear.</p>
+
+    <section>
+      <h2>1. Tokens, vocabulary and IDs</h2>
+      <p>Text is split into <em class="term">tokens</em>. For the RNN part of this project a token is simply a word, found by splitting on spaces. A fixed <em class="term">vocabulary</em> lists every token the model knows, and gives each one an integer ID. Four IDs are reserved for special tokens:</p>
+      <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>ID</th><th>Token</th><th>Purpose</th></tr></thead>
+        <tbody>
+          <tr><td>0</td><td><code>&lt;SOS&gt;</code></td><td>start of sequence: the first input to the decoder, before any word has been generated</td></tr>
+          <tr><td>1</td><td><code>&lt;EOS&gt;</code></td><td>end of sequence: generating it signals "the title is finished"</td></tr>
+          <tr><td>2</td><td><code>&lt;PAD&gt;</code></td><td>padding: filler that makes sequences in a batch equally long (section 2)</td></tr>
+          <tr><td>3</td><td><code>&lt;UNK&gt;</code></td><td>unknown: replaces any word that isn't in the vocabulary</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p>These are the exact IDs used in the project's code. Every other vocabulary word gets an ID from 4 upwards.</p>
+    </section>
+
+    <section>
+      <h2>2. Padding and masks</h2>
+      <p>A mini-batch is processed as one rectangular grid of numbers, but articles and titles have different lengths. Shorter sequences are extended with <code>&lt;PAD&gt;</code> up to the longest one in the batch:</p>
+      <div class="worked">
+        <span class="box-label">Worked example: a batch of three titles</span>
+        \[ \begin{bmatrix} 17 &amp; 942 &amp; 58 \\ 305 &amp; 2 &amp; 2 \\ 81 &amp; 4410 &amp; 2 \end{bmatrix} \qquad \text{mask } m = \begin{bmatrix} 1 &amp; 1 &amp; 1 \\ 1 &amp; 0 &amp; 0 \\ 1 &amp; 1 &amp; 0 \end{bmatrix} \]
+        <p>The IDs are illustrative, and 2 is <code>&lt;PAD&gt;</code>. The <em class="term">mask</em> marks real tokens with 1 and padding with 0. Padding is filler, so it must never count as something the model got right or wrong. The mask is how the loss ignores it (section 6).</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>3. Embeddings: from an ID to a vector of meaning</h2>
+      <p>An ID like 942 is just a label. Its size means nothing, since word 942 isn't "bigger" than word 17. So each ID selects one row of an <em class="term">embedding matrix</em> \(E\), a learnable table with one row of \(d\) numbers per vocabulary word:</p>
+      <div class="eq">
+        \[ E \in \mathbb{R}^{V \times d}, \qquad \mathbf{e}(w) = E_{\,\mathrm{id}(w)} \in \mathbb{R}^{d} \]
+        <p class="note">\(V\) is the vocabulary size and \(d\) the embedding size (\(d = 300\) in this project). The lookup is mathematically identical to multiplying a <em class="term">one-hot</em> vector \(\mathbf{o}\), which has \(V\) numbers that are all 0 except a 1 at the word's ID, by the matrix: \(\mathbf{e}(w) = E^\top \mathbf{o}\). So an embedding table is just a linear layer (page 1, section 2), stored in a form that's fast to look up. Its entries are parameters like any others. Backpropagation adjusts them, and words used in similar contexts drift towards similar vectors.</p>
+      </div>
+      <p>The <code>&lt;PAD&gt;</code> row is special: PyTorch's <code>padding_idx</code> option keeps it fixed at all zeros and never updates it.</p>
+    </section>
+
+    <section>
+      <h2>4. Generating text means predicting one token at a time</h2>
+      <p>A <em class="term">language model</em> assigns a probability to a sequence of tokens. For title generation we want the probability of a title \(\mathbf{y} = (y_1, \ldots, y_T)\) given an article \(\mathbf{x}\). The chain rule of probability splits this exactly into one prediction per position:</p>
+      <div class="eq">
+        \[ P(\mathbf{y} \mid \mathbf{x}) = \prod_{t=1}^{T} P\big(y_t \mid y_{\lt t},\, \mathbf{x}\big) \]
+        <p class="note">\(y_{\lt t}\) means "all tokens before position \(t\)". This is an identity, not an approximation. It means a model never has to produce a whole title at once. It only needs to answer one repeated question: given the article and the words so far, how likely is each possible next word? Every model in this project, RNN and Transformer alike, generates this way.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>5. Softmax: turning scores into probabilities</h2>
+      <p>At each position the network outputs one raw score per vocabulary word, a vector of <em class="term">logits</em> \(\mathbf{o} \in \mathbb{R}^V\). Softmax converts them into a probability distribution:</p>
+      <div class="eq">
+        \[ p_i = \operatorname{softmax}(\mathbf{o})_i = \frac{\exp(o_i)}{\sum_{j=1}^{V} \exp(o_j)} \]
+        <p class="note">Exponentiating makes every value positive, and dividing by the total makes them sum to 1. Larger logits get disproportionately more probability.</p>
+      </div>
+      <div class="worked">
+        <span class="box-label">Worked example: three-word vocabulary</span>
+        \[ \mathbf{o} = (2.0,\ 1.0,\ 0.1) \;\Rightarrow\; (e^{2.0}, e^{1.0}, e^{0.1}) = (7.389,\ 2.718,\ 1.105),\ \text{total } 11.212 \]
+        \[ \mathbf{p} = (0.659,\ 0.242,\ 0.099) \]
+      </div>
+      <p>One property matters later, in Part B2's beam search: <strong>adding the same constant \(c\) to every logit changes nothing</strong>, because the factor \(e^{c}\) cancels between numerator and denominator.</p>
+      <div class="eq">
+        \[ \operatorname{softmax}(\mathbf{o} + c) = \operatorname{softmax}(\mathbf{o}), \qquad \log p_i = o_i - \log \sum_{j} \exp(o_j) \]
+        <p class="note">The second form, the log-probability, shows the same thing from another angle: a logit only becomes a log-probability after subtracting a normalizing term that depends on <em>all</em> the logits at that position.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>6. Cross-entropy: the loss for predicting words</h2>
+      <p>If the correct token at position \(t\) is \(y_t\), the loss for that position is the negative log of the probability the model gave it:</p>
+      <div class="eq">
+        \[ \ell_t = -\log p_{y_t} \]
+        <p class="note">From the worked example: if the correct word was the first one (\(p = 0.659\)), \(\ell = 0.417\). If it was the third (\(p = 0.099\)), \(\ell = 2.31\). A confident right answer costs almost nothing, and a confident wrong one costs a lot.</p>
+      </div>
+      <p><strong>Why this particular loss?</strong> Taking the negative log of the chain rule from section 4 turns the product into a sum of exactly these per-token losses:</p>
+      <div class="eq">
+        \[ -\log P(\mathbf{y} \mid \mathbf{x}) = -\sum_{t=1}^{T} \log P\big(y_t \mid y_{\lt t}, \mathbf{x}\big) = \sum_{t=1}^{T} \ell_t \]
+        <p class="note">So minimizing the summed cross-entropy is the same as making the real titles as probable as possible under the model. This is called <em class="term">maximum likelihood</em> training.</p>
+      </div>
+      <p>Over a batch, padded positions are excluded using the mask from section 2, and the loss is averaged over the real tokens only:</p>
+      <div class="eq">
+        \[ \mathcal{L} = \frac{\sum_{n=1}^{B}\sum_{t=1}^{T} m_{n,t}\; \ell_{n,t}}{\sum_{n=1}^{B}\sum_{t=1}^{T} m_{n,t}} \]
+        <p class="note">In PyTorch this is <code>nn.CrossEntropyLoss(ignore_index=PAD_TOKEN)</code>. It takes raw logits and applies softmax internally, which is why the project's decoders return logits, not probabilities.</p>
+      </div>
+      <p><strong>What the gradient does.</strong> Writing \(\ell = -o_{c} + \log\sum_j \exp(o_j)\) for correct token \(c\) and differentiating with respect to each logit gives a remarkably simple result:</p>
+      <div class="eq">
+        \[ \frac{\partial \ell}{\partial o_i} = p_i - \mathbf{1}[i = c] \]
+        <p class="note">\(\mathbf{1}[i=c]\) is 1 for the correct token and 0 for all others. Gradient descent therefore raises the correct token's logit (its gradient \(p_c - 1\) is negative) and lowers <em>every other</em> token's logit in proportion to the probability it wrongly received. One consequence matters for Part B1: <strong>a token that never appears as a correct answer only ever gets pushed down.</strong></p>
+      </div>
+      <p><strong>Reading a loss value.</strong> \(\exp(\mathcal{L})\) is called <em class="term">perplexity</em>. It's the number of equally-likely words the model is effectively choosing between. A model that knows nothing and spreads probability evenly over 9,215 words has \(\mathcal{L} = \log 9215 \approx 9.13\), a perplexity of 9,215. A training loss of 1.55 means a perplexity of \(e^{1.55} \approx 4.7\).</p>
+    </section>
+
+    <section>
+      <h2>7. Recurrent neural networks</h2>
+      <p>An article is a sequence \(\mathbf{x}_1, \ldots, \mathbf{x}_L\) of embedding vectors. A <em class="term">recurrent neural network</em> reads it one step at a time, carrying a <em class="term">hidden state</em> \(\mathbf{h}_t\) that summarizes everything read so far:</p>
+      <div class="eq">
+        \[ \mathbf{h}_t = \tanh\big(W\mathbf{x}_t + U\mathbf{h}_{t-1} + \mathbf{b}\big), \qquad \mathbf{h}_0 = \mathbf{0} \]
+        <p class="note">The same \(W\), \(U\) and \(\mathbf{b}\) are reused at every step. That's what lets one network handle sequences of any length.</p>
+      </div>
+      <div class="figure">
+        <svg viewBox="0 0 640 160" width="640" height="160" role="img" aria-label="An RNN unrolled over four time steps">
+          <defs><marker id="ah" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 z" fill="var(--ink-soft)"/></marker></defs>
+          <g fill="var(--accent-soft)" stroke="var(--accent)">
+            <rect x="50" y="50" width="100" height="40" rx="6"/><rect x="200" y="50" width="100" height="40" rx="6"/><rect x="350" y="50" width="100" height="40" rx="6"/><rect x="500" y="50" width="100" height="40" rx="6"/>
+          </g>
+          <g font-family="IBM Plex Mono, monospace" font-size="12" fill="var(--accent)" text-anchor="middle">
+            <text x="100" y="75">cell</text><text x="250" y="75">cell</text><text x="400" y="75">cell</text><text x="550" y="75">cell</text>
+          </g>
+          <g stroke="var(--ink-soft)" stroke-width="1.5" marker-end="url(#ah)">
+            <line x1="10" y1="70" x2="46" y2="70"/><line x1="150" y1="70" x2="196" y2="70"/><line x1="300" y1="70" x2="346" y2="70"/><line x1="450" y1="70" x2="496" y2="70"/><line x1="600" y1="70" x2="632" y2="70"/>
+            <line x1="100" y1="120" x2="100" y2="94"/><line x1="250" y1="120" x2="250" y2="94"/><line x1="400" y1="120" x2="400" y2="94"/><line x1="550" y1="120" x2="550" y2="94"/>
+          </g>
+          <g font-family="IBM Plex Mono, monospace" font-size="12" fill="var(--ink)" text-anchor="middle">
+            <text x="24" y="60">h₀</text><text x="174" y="60">h₁</text><text x="324" y="60">h₂</text><text x="474" y="60">h₃</text><text x="618" y="60">h₄</text>
+            <text x="100" y="140">x₁</text><text x="250" y="140">x₂</text><text x="400" y="140">x₃</text><text x="550" y="140">x₄</text>
+          </g>
+        </svg>
+        <figcaption>One cell with one set of weights, applied four times. Each step combines the new input with the previous state.</figcaption>
+      </div>
+    </section>
+
+    <section>
+      <h2>8. Why plain RNNs forget: vanishing gradients</h2>
+      <p>To learn that word 5 of an article matters for the title, the loss gradient has to travel back from the end of the sequence to step 5. By the chain rule (page 1, section 7) that path is a product of one factor per step:</p>
+      <div class="eq">
+        \[ \frac{\partial \mathbf{h}_T}{\partial \mathbf{h}_k} = \prod_{t=k+1}^{T} \frac{\partial \mathbf{h}_t}{\partial \mathbf{h}_{t-1}}, \qquad \frac{\partial \mathbf{h}_t}{\partial \mathbf{h}_{t-1}} = \operatorname{diag}\!\big(1 - \mathbf{h}_t \odot \mathbf{h}_t\big)\, U \]
+        <p class="note">The second formula is the derivative of \(\tanh\) (page 1, section 3), which is never more than 1, multiplied by \(U\). If each factor scales the gradient by at most some \(\gamma \lt 1\), then after \(T - k\) steps it has shrunk by \(\gamma^{T-k}\). With \(\gamma = 0.9\) over 100 words, \(0.9^{100} \approx 2.7 \times 10^{-5}\). The learning signal from early words effectively disappears. (If \(\gamma \gt 1\) the opposite happens, and gradients <em>explode</em>, which is one reason for gradient clipping.)</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>9. The GRU: a recurrent cell with gates</h2>
+      <p>A <em class="term">Gated Recurrent Unit</em> replaces the single \(\tanh\) update with two learned <em class="term">gates</em>, vectors of numbers between 0 and 1 produced by sigmoids, that decide how much of the old state to keep. These are the exact equations PyTorch's <code>nn.GRU</code> computes, which is the layer the project uses:</p>
+      <div class="eq">
+        \[ \begin{aligned}
+          \mathbf{r}_t &amp;= \sigma\big(W_{ir}\mathbf{x}_t + \mathbf{b}_{ir} + W_{hr}\mathbf{h}_{t-1} + \mathbf{b}_{hr}\big) &amp;&amp; \text{reset gate} \\
+          \mathbf{z}_t &amp;= \sigma\big(W_{iz}\mathbf{x}_t + \mathbf{b}_{iz} + W_{hz}\mathbf{h}_{t-1} + \mathbf{b}_{hz}\big) &amp;&amp; \text{update gate} \\
+          \mathbf{n}_t &amp;= \tanh\big(W_{in}\mathbf{x}_t + \mathbf{b}_{in} + \mathbf{r}_t \odot (W_{hn}\mathbf{h}_{t-1} + \mathbf{b}_{hn})\big) &amp;&amp; \text{candidate state} \\
+          \mathbf{h}_t &amp;= (1 - \mathbf{z}_t) \odot \mathbf{n}_t + \mathbf{z}_t \odot \mathbf{h}_{t-1} &amp;&amp; \text{new state}
+        \end{aligned} \]
+        <p class="note">Reading the equations in order: the <strong>reset gate</strong> \(\mathbf{r}_t\) decides how much of the old state feeds into the proposed new content \(\mathbf{n}_t\). Near 0, the candidate is built almost entirely from the current word. The <strong>update gate</strong> \(\mathbf{z}_t\) then blends the old state with the candidate, one number at a time. Near 1, that number of the memory is kept as it was. Near 0, it's overwritten. The gates are computed from the current word and state, so the network decides, word by word, what to hold on to.</p>
+      </div>
+      <p><strong>Why this fixes forgetting.</strong> Differentiate the last line with respect to \(\mathbf{h}_{t-1}\). Among its terms is \(\operatorname{diag}(\mathbf{z}_t)\) directly: the old state passes straight through, scaled only by the gate. When the network learns to keep \(\mathbf{z}_t\) close to 1 for information worth remembering, that factor is close to the identity. The product of factors from section 8 then no longer has to shrink. Unlike the plain RNN, the path doesn't have to pass through a squashing \(\tanh\) and a weight matrix at every step.</p>
+      <div class="eq">
+        \[ \text{parameters per GRU} = 3\big(d_h d_x + d_h d_h + 2 d_h\big) \]
+        <p class="note">The factor 3 counts the reset, update and candidate computations, each with an input matrix, a hidden matrix and two bias vectors. With \(d_x = d_h = 300\): \(3(90{,}000 + 90{,}000 + 600) = 541{,}800\).</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>10. Bidirectional GRUs</h2>
+      <p>When the whole input is available up front, as with an article, it can be read in both directions. One GRU runs left to right and a second, with separate weights, runs right to left:</p>
+      <div class="eq">
+        \[ \overrightarrow{\mathbf{h}}_t = \mathrm{GRU}_{\rightarrow}\big(\mathbf{x}_t, \overrightarrow{\mathbf{h}}_{t-1}\big), \qquad \overleftarrow{\mathbf{h}}_t = \mathrm{GRU}_{\leftarrow}\big(\mathbf{x}_t, \overleftarrow{\mathbf{h}}_{t+1}\big) \]
+        \[ \text{output at position } t: \; [\overrightarrow{\mathbf{h}}_t ; \overleftarrow{\mathbf{h}}_t] \in \mathbb{R}^{2d_h}, \qquad \text{final states: } \overrightarrow{\mathbf{h}}_L \text{ and } \overleftarrow{\mathbf{h}}_1 \]
+        <p class="note">Each position's output now reflects context from both sides. The two final states are the two directions' summaries of the whole input: \(\overrightarrow{\mathbf{h}}_L\) has read up to the last word, and \(\overleftarrow{\mathbf{h}}_1\) has read back to the first. A decoder can't be bidirectional, because when it writes word \(t\), the words after \(t\) don't exist yet.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>11. The encoder–decoder</h2>
+      <p>Now the pieces combine. An <em class="term">encoder</em> reads the article and produces a summary vector \(\mathbf{c}\). A <em class="term">decoder</em>, a second recurrent network, starts from that summary and generates the title one token at a time, using the chain rule from section 4:</p>
+      <div class="eq">
+        \[ \begin{aligned}
+          \mathbf{c} &amp;= \mathrm{Encoder}(\mathbf{x}_1, \ldots, \mathbf{x}_L) &amp;&amp; \text{summary of the article} \\
+          \mathbf{s}_0 &amp;= f(\mathbf{c}) &amp;&amp; \text{decoder's starting state} \\
+          \mathbf{s}_t &amp;= \mathrm{GRU}_{\text{dec}}\big(\mathbf{e}(y_{t-1}),\ \mathbf{s}_{t-1}\big), \quad y_0 = \langle\mathrm{SOS}\rangle &amp;&amp; \text{read the previous token} \\
+          \mathbf{p}_t &amp;= \operatorname{softmax}\big(W_o\mathbf{s}_t + \mathbf{b}_o\big) &amp;&amp; \text{distribution over the next token}
+        \end{aligned} \]
+      </div>
+      <div class="figure">
+        <svg viewBox="0 0 680 200" width="680" height="200" role="img" aria-label="Encoder GRU cells feed a single fixed-size vector c into decoder GRU cells">
+          <defs><marker id="ah2" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 z" fill="var(--ink-soft)"/></marker></defs>
+          <text x="20" y="20" font-family="IBM Plex Mono, monospace" font-size="11" fill="var(--accent)">ENCODER reads the article</text>
+          <text x="420" y="20" font-family="IBM Plex Mono, monospace" font-size="11" fill="var(--good)">DECODER writes the title</text>
+          <g fill="var(--accent-soft)" stroke="var(--accent)">
+            <rect x="20" y="90" width="62" height="36" rx="5"/><rect x="100" y="90" width="62" height="36" rx="5"/><rect x="180" y="90" width="62" height="36" rx="5"/><rect x="260" y="90" width="62" height="36" rx="5"/>
+          </g>
+          <g fill="var(--good-soft)" stroke="var(--good)">
+            <rect x="420" y="90" width="62" height="36" rx="5"/><rect x="500" y="90" width="62" height="36" rx="5"/><rect x="580" y="90" width="62" height="36" rx="5"/>
+          </g>
+          <rect x="345" y="92" width="44" height="32" rx="4" fill="var(--warn-soft)" stroke="var(--warn)" stroke-width="2"/>
+          <text x="367" y="113" font-family="IBM Plex Mono, monospace" font-size="13" fill="var(--warn)" text-anchor="middle">c</text>
+          <text x="367" y="80" font-family="IBM Plex Sans, sans-serif" font-size="10.5" fill="var(--warn)" text-anchor="middle">fixed size</text>
+          <g stroke="var(--ink-soft)" stroke-width="1.3" marker-end="url(#ah2)">
+            <line x1="82" y1="108" x2="97" y2="108"/><line x1="162" y1="108" x2="177" y2="108"/><line x1="242" y1="108" x2="257" y2="108"/>
+            <line x1="322" y1="108" x2="342" y2="108"/><line x1="389" y1="108" x2="417" y2="108"/>
+            <line x1="482" y1="108" x2="497" y2="108"/><line x1="562" y1="108" x2="577" y2="108"/>
+            <line x1="51" y1="152" x2="51" y2="129"/><line x1="131" y1="152" x2="131" y2="129"/><line x1="211" y1="152" x2="211" y2="129"/><line x1="291" y1="152" x2="291" y2="129"/>
+            <line x1="451" y1="152" x2="451" y2="129"/><line x1="531" y1="152" x2="531" y2="129"/><line x1="611" y1="152" x2="611" y2="129"/>
+            <line x1="451" y1="90" x2="451" y2="58"/><line x1="531" y1="90" x2="531" y2="58"/><line x1="611" y1="90" x2="611" y2="58"/>
+          </g>
+          <g font-family="IBM Plex Mono, monospace" font-size="11" fill="var(--ink)" text-anchor="middle">
+            <text x="51" y="170">great</text><text x="131" y="170">barrier</text><text x="211" y="170">reef</text><text x="291" y="170">world…</text>
+            <text x="451" y="170">&lt;SOS&gt;</text><text x="531" y="170">great</text><text x="611" y="170">barrier</text>
+            <text x="451" y="50">great</text><text x="531" y="50">barrier</text><text x="611" y="50">reef</text>
+          </g>
+          <text x="531" y="192" font-family="IBM Plex Sans, sans-serif" font-size="10.5" fill="var(--ink-soft)" text-anchor="middle">each input is the previous output token</text>
+        </svg>
+        <figcaption>Everything the decoder knows about the article has to pass through one vector, c.</figcaption>
+      </div>
+      <p><strong>The bottleneck.</strong> However long the article, \(\mathbf{c}\) has the same fixed number of entries, and after step 0 the decoder never sees the article again. Only whatever survived compression into \(\mathbf{c}\), carried forward in \(\mathbf{s}_t\), is available. This single structural fact sets a ceiling on every RNN variant in Part B. Part C1's attention mechanism is designed specifically to remove it.</p>
+    </section>
+
+    <section>
+      <h2>12. Training the decoder: teacher forcing</h2>
+      <p>The formula above feeds the decoder the previous token \(y_{t-1}\). But which one: the real title's word, or the word the model itself just predicted?</p>
+      <ul>
+        <li><strong>During training</strong> the input is the <em>real</em> previous word from the reference title. This is <em class="term">teacher forcing</em>. Every position learns from a correct history, so an early mistake can't corrupt the training signal for the rest of the title.</li>
+        <li><strong>During generation</strong> no real title exists, so the input is the model's <em>own</em> previous prediction \(\hat{y}_{t-1}\).</li>
+      </ul>
+      <p>The mismatch has a name, <em class="term">exposure bias</em>: the model never practises continuing from its own mistakes during training, but it has to at generation time.</p>
+    </section>
+
+    <section>
+      <h2>13. Generating: greedy decoding and knowing when to stop</h2>
+      <p>The simplest way to generate is <em class="term">greedy decoding</em>: at every step take the single most probable token and feed it back in.</p>
+      <div class="eq">
+        \[ \hat{y}_t = \operatorname*{arg\,max}_{w}\; p_t(w), \qquad \text{stop when } \hat{y}_t = \langle\mathrm{EOS}\rangle \text{ or } t = \text{max\_new\_tokens} \]
+        <p class="note">\(\arg\max\) means "the \(w\) that gives the largest value". The cap <code>max_new_tokens</code> guarantees generation ends even if <code>&lt;EOS&gt;</code> never appears. It's 10 in this project.</p>
+      </div>
+      <p><strong>A model can only learn to stop if it's trained to.</strong> From the gradient in section 6, the <code>&lt;EOS&gt;</code> logit rises only at positions where <code>&lt;EOS&gt;</code> is the correct answer. If training titles never end with an <code>&lt;EOS&gt;</code> token, it's pushed down at every position and will essentially never be the most probable token. The model then writes until it hits the length cap. Part B1 turns out to depend on exactly this.</p>
+      <p>Greedy decoding also has a blind spot: the best word now can lead to a worse title overall. Part B2's beam search addresses that.</p>
+    </section>
+
+    <div class="recap"><span class="box-label">Carried forward</span>special token IDs · padding masks · embeddings as a learnable lookup table · the chain rule of probability · softmax and its shift-invariance · cross-entropy as maximum likelihood, and its \(p - \mathbf{1}\) gradient · perplexity · RNN recurrence and vanishing gradients · the GRU equations · bidirectional reading · the encoder–decoder and its fixed-size bottleneck · teacher forcing and exposure bias · greedy decoding and why <code>&lt;EOS&gt;</code> has to be trained.</div>
+  </main>
+  <div class="pager">
+    <a href="01-neural-network-basics.html"><span class="lbl">Back</span>← 1 · Neural network basics</a>
+    <a class="next" href="03-part-a-preprocessing.html"><span class="lbl">Next</span>Part A · Preprocessing →</a>
+  </div>
+</div>
+</body>
+</html>

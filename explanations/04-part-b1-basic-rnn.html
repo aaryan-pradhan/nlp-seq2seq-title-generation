@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Part B1: Basic RNN · From Article to Headline</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;1,9..144,500&family=IBM+Plex+Sans:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.css">
+<link rel="stylesheet" href="style.css">
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.js"></script>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/contrib/auto-render.min.js"></script>
+<script defer src="render.js"></script>
+</head>
+<body>
+<div class="offline-note">Formulas are typeset by KaTeX, which loads from the internet. Without a connection they show as raw LaTeX.</div>
+<div class="page">
+  <header class="masthead">
+    <div class="crumb"><a href="index.html">Explanations</a><span class="sep">/</span><span class="here">Part B1 · Basic RNN</span></div>
+    <span class="stage-tag">Part B1</span>
+    <h1 class="title">The basic RNN Seq2Seq model</h1>
+    <p class="dek">The encoder–decoder from page 2, built with GRUs, trained on the cleaned articles, and scored with ROUGE. Every later model is compared against this one.</p>
+  </header>
+  <main>
+
+    <div class="recap"><span class="box-label">Uses</span>everything on <a href="02-sequence-models.html">page 2</a>: embeddings, masks, softmax and cross-entropy, GRUs, bidirectional reading, the encoder–decoder, teacher forcing, greedy decoding. Also Adam, epochs, dropout and gradient clipping from <a href="01-neural-network-basics.html">page 1</a>, and the cleaned data from <a href="03-part-a-preprocessing.html">Part A</a>.</div>
+
+    <section>
+      <div class="spec-quote">
+        <span class="box-label">assignment_spec.pdf · B1</span>
+        <blockquote>"EncoderRNN takes an input token sequence as input, and maps them into some vector embeddings which are then fed to a bidirectional Gated Recurrent Unit (GRU) capturing the meaning of the entire sequence into some hidden embeddings. DecoderRNN takes as input one token as input along with the previous hidden state, encodes the token into vector embedding and processes it through a GRU (uni-directional) to get the current hidden state and outputs. These outputs are fed through a linear Feed Forward Network (FFN) to map it to the vocabulary dimension, obtaining a set of logits. Perform softmax on the logits and return this probability distribution of tokens along with the current hidden state. […] Note that during training, however, the input token fed to the DecoderRNN is the actual target token in the ground truth, and not the token generated in the previous time step. This process is also known as teacher-forcing."</blockquote>
+      </div>
+      <p>Each phrase maps directly onto page 2. "Vector embeddings" is section 3, the "bidirectional GRU" is sections 9–10, "logits" and "softmax" are section 5, the encoder feeding the decoder is section 11, and teacher forcing is section 12. B1 adds no new concepts. It fixes concrete sizes and wires the pieces together.</p>
+    </section>
+
+    <section>
+      <h2>1. Building the vocabulary</h2>
+      <div class="spec-quote">
+        <span class="box-label">assignment_spec.pdf · B1, task 1</span>
+        <blockquote>"While creating the vocabulary, consider only tokens that appear in at least 1% of the training set. You can use a hidden dimension of 300."</blockquote>
+      </div>
+      <p>The code counts, for every cleaned word, how many <em>different</em> training articles it appears in (its document frequency), and keeps the words that clear 1%:</p>
+      <div class="eq">
+        \[ \text{keep } w \iff \frac{\#\{\text{articles containing } w\}}{N} \ge 0.01, \qquad N = 13{,}379 \;\Rightarrow\; w \text{ must appear in at least } 134 \text{ articles} \]
+        <p class="note">\(0.01 \times 13{,}379 = 133.79\), and a count has to be a whole number, so at least 134. That leaves 9,211 words, plus the four special tokens, for \(V = 9{,}215\).</p>
+      </div>
+      <p><strong>Why a threshold at all?</strong> The embedding table and the decoder's output layer each have one row per vocabulary word (see the parameter count below). A word seen in only a handful of articles would add a full row of parameters while providing almost no examples to learn it from.</p>
+      <div class="callout impl">
+        <span class="box-label">In the notebook · the vocabulary comes from article text only</span>
+        <p><code>create_vocabulary(paragraphs, titles, …)</code> accepts the titles but only counts words in <code>paragraphs</code>. A title word that's rare in article bodies, which describes many names, becomes <code>&lt;UNK&gt;</code> (ID 3) in the training targets. <code>tokenize_text</code> also doesn't add <code>&lt;SOS&gt;</code> or <code>&lt;EOS&gt;</code>, so the title "great barrier reef" becomes just the three word IDs.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>2. The model, with every size filled in</h2>
+      <h3>Encoder (<code>EncoderRNN</code>)</h3>
+      <div class="eq">
+        \[ \begin{aligned}
+          \mathbf{e}_i &amp;= \operatorname{Dropout}_{0.3}\big(E_{\text{enc}}[x_i]\big) \in \mathbb{R}^{300} &amp;&amp; i = 1, \ldots, L \\
+          \overrightarrow{\mathbf{h}}_i,\ \overleftarrow{\mathbf{h}}_i &amp;= \text{bidirectional GRU over } \mathbf{e}_1, \ldots, \mathbf{e}_L &amp;&amp; \text{each} \in \mathbb{R}^{300} \\
+          \mathbf{c} &amp;= [\overrightarrow{\mathbf{h}}_L ; \overleftarrow{\mathbf{h}}_1] \in \mathbb{R}^{600} &amp;&amp; \text{both directions' final states}
+        \end{aligned} \]
+      </div>
+      <h3>Bridge (<code>hidden_projection</code>)</h3>
+      <div class="eq">
+        \[ \mathbf{s}_0 = W_p\,\mathbf{c} + \mathbf{b}_p, \qquad W_p \in \mathbb{R}^{300 \times 600} \]
+        <p class="note">The encoder's summary has 600 numbers (two directions of 300) but the decoder GRU's state has 300, so a linear layer (page 1, section 2) maps one to the other. This is \(f(\mathbf{c})\) from page 2, section 11.</p>
+      </div>
+      <h3>Decoder (<code>DecoderRNN</code>), one step</h3>
+      <div class="eq">
+        \[ \begin{aligned}
+          \mathbf{u}_t &amp;= \operatorname{ReLU}\big(E_{\text{dec}}[y_{t-1}]\big) \in \mathbb{R}^{300} \\
+          \mathbf{s}_t &amp;= \mathrm{GRU}_{\text{dec}}(\mathbf{u}_t, \mathbf{s}_{t-1}) \in \mathbb{R}^{300} \\
+          \mathbf{o}_t &amp;= W_o\,\mathbf{s}_t + \mathbf{b}_o \in \mathbb{R}^{9215}
+        \end{aligned} \]
+        <p class="note">The decoder has its own embedding table \(E_{\text{dec}}\), separate from the encoder's. The ReLU after it follows the spec's "add dropout/ReLU where you see fit". The decoder returns the logits \(\mathbf{o}_t\). Softmax is applied inside the loss (page 2, section 6), so the <code>LogSoftmax</code> layer defined in the class is never actually called.</p>
+      </div>
+      <div class="callout fix">
+        <span class="box-label">docs/report.pdf · bugs hit and fixed</span>
+        <ul>
+          <li>Manual <code>.to(device)</code> calls caused shape mismatches and GPU memory overflows. They were removed in favour of letting Accelerate place every tensor.</li>
+          <li>Variable-length sequences broke the loss computation. This was fixed with a <code>collate_fn</code> that pads every batch, plus <code>ignore_index=PAD_TOKEN</code> so padding never counts.</li>
+          <li>Index errors occurred when the target length and decoder output length disagreed. The target sequence is now sliced or padded to match.</li>
+        </ul>
+      </div>
+      <h3>Tensor shapes through one training batch</h3>
+      <p>With batch size \(B = 8\), \(L\) = the longest article in the batch and \(T\) = the longest title in the batch:</p>
+      <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Stage</th><th>Shape</th></tr></thead>
+        <tbody>
+          <tr><td>Article IDs (padded)</td><td>\(8 \times L\)</td></tr>
+          <tr><td>Encoder embeddings</td><td>\(8 \times L \times 300\)</td></tr>
+          <tr><td>Bidirectional GRU final states</td><td>\(2 \times 8 \times 300\), reshaped to \(8 \times 600 = \mathbf{c}\)</td></tr>
+          <tr><td>After projection, \(\mathbf{s}_0\)</td><td>\(8 \times 300\)</td></tr>
+          <tr><td>Decoder input at step \(t\)</td><td>\(8\) token IDs, embedded to \(8 \times 300\)</td></tr>
+          <tr><td>Logits at step \(t\)</td><td>\(8 \times 9{,}215\)</td></tr>
+          <tr><td>All steps stacked</td><td>\(8 \times T \times 9{,}215\)</td></tr>
+          <tr><td>Flattened for the loss</td><td>\(8T \times 9{,}215\) logits against \(8T\) target IDs</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <h3>Parameter count</h3>
+      <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Component</th><th>Calculation</th><th class="num">Parameters</th></tr></thead>
+        <tbody>
+          <tr><td>Encoder embedding</td><td>\(9{,}215 \times 300\)</td><td class="num">2,764,500</td></tr>
+          <tr><td>Encoder GRU, 2 directions</td><td>\(2 \times 541{,}800\) (page 2, section 9)</td><td class="num">1,083,600</td></tr>
+          <tr><td>Projection</td><td>\(300 \times 600 + 300\)</td><td class="num">180,300</td></tr>
+          <tr><td>Decoder embedding</td><td>\(9{,}215 \times 300\)</td><td class="num">2,764,500</td></tr>
+          <tr><td>Decoder GRU</td><td>\(541{,}800\)</td><td class="num">541,800</td></tr>
+          <tr><td>Output layer</td><td>\(300 \times 9{,}215 + 9{,}215\)</td><td class="num">2,773,715</td></tr>
+          <tr class="hi"><td>Total</td><td></td><td class="num">10,108,415</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p>More than half of the roughly 10.1 million parameters sit in the three vocabulary-sized tables, which is the concrete cost the 1% threshold keeps in check.</p>
+    </section>
+
+    <section>
+      <h2>3. One training step, in order</h2>
+      <ol>
+        <li><strong>Batch.</strong> Take 8 (article, title) pairs and pad each group to its longest member.</li>
+        <li><strong>Encode.</strong> Run the encoder and projection to get \(\mathbf{s}_0\).</li>
+        <li><strong>Decode with teacher forcing.</strong> For \(t = 1, \ldots, T\), feed \(y_{t-1}\) (with \(y_0 = \langle\mathrm{SOS}\rangle\)) and record the logits \(\mathbf{o}_t\).</li>
+        <li><strong>Loss.</strong> Compute the masked cross-entropy from page 2, section 6 over all \(8T\) positions, skipping <code>&lt;PAD&gt;</code>.</li>
+        <li><strong>Backward.</strong> <code>accelerator.backward(loss)</code> computes all gradients by backpropagation, including through every decoder and encoder time step.</li>
+        <li><strong>Clip.</strong> Rescale the gradient if its length exceeds 1.0.</li>
+        <li><strong>Update.</strong> One Adam step with learning rate 0.001.</li>
+      </ol>
+      <div class="worked">
+        <span class="box-label">Worked example · what the decoder sees for the title "great barrier reef"</span>
+        <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>Step \(t\)</th><th>Input \(y_{t-1}\)</th><th>Target \(y_t\)</th><th>Loss term</th></tr></thead>
+          <tbody>
+            <tr><td>1</td><td><code>&lt;SOS&gt;</code></td><td>great</td><td>\(-\log p_1(\text{great})\)</td></tr>
+            <tr><td>2</td><td>great</td><td>barrier</td><td>\(-\log p_2(\text{barrier})\)</td></tr>
+            <tr><td>3</td><td>barrier</td><td>reef</td><td>\(-\log p_3(\text{reef})\)</td></tr>
+            <tr><td>4…\(T\)</td><td colspan="2">padding, if a longer title shares the batch</td><td>masked out</td></tr>
+          </tbody>
+        </table>
+        </div>
+        <p>No position ever has <code>&lt;EOS&gt;</code> as its target, because the tokenized titles don't contain one. By page 2, section 13, the model therefore can't learn to stop.</p>
+      </div>
+      <h3>Mixed precision (fp16) via Accelerate</h3>
+      <p>Numbers are normally stored in 32 bits. <code>Accelerator(mixed_precision="fp16")</code> runs most matrix multiplications in 16-bit floats instead, which roughly halves their memory and uses faster GPU routines. The parameters themselves stay in 32 bits. The catch is range: 16-bit floats can't exceed 65,504, and gradients smaller than roughly \(6\times10^{-8}\) round to exactly zero. <em class="term">Loss scaling</em> prevents that:</p>
+      <div class="eq">
+        \[ \nabla_\theta (S \cdot \mathcal{L}) = S \cdot \nabla_\theta \mathcal{L} \quad\Rightarrow\quad \text{backpropagate } S\mathcal{L}, \text{ then use } \frac{1}{S}\nabla_\theta(S\mathcal{L}) \text{ for the update} \]
+        <p class="note">Multiplying the loss by a large factor \(S\) multiplies every gradient by \(S\) (differentiation is linear), which lifts tiny gradients back above the rounding threshold during backpropagation. They're divided by \(S\) again before the Adam step, so the update is unchanged. If a scaled gradient overflows, the step is skipped and \(S\) is reduced. The report measured about a <strong>20% reduction in training time</strong> from mixed precision.</p>
+      </div>
+      <div class="tbl-wrap">
+      <table>
+        <caption>Training log · 3 epochs, about 313 s each (15 min 38 s total)</caption>
+        <thead><tr><th>Epoch</th><th class="num">Mean training loss</th><th class="num">Perplexity \(e^{\mathcal{L}}\)</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td class="num">4.182</td><td class="num">65.5</td></tr>
+          <tr><td>2</td><td class="num">2.412</td><td class="num">11.2</td></tr>
+          <tr><td>3</td><td class="num">1.550</td><td class="num">4.7</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p>For scale: guessing uniformly over the vocabulary gives a loss of \(\log 9215 \approx 9.13\). By epoch 3 the model is, on average, about as uncertain as a choice between 4.7 words on training titles.</p>
+    </section>
+
+    <section>
+      <h2>4. Generating titles for the test set</h2>
+      <p>At evaluation time there's no target, so the model decodes greedily (page 2, section 13) for up to <code>MAX_NEW_TOKENS = 10</code> steps, feeding each prediction back in. The loop exits early only if <em>every</em> article in the batch produces <code>&lt;EOS&gt;</code> on the same step. The predicted IDs are turned back into words by <code>decode_outputs</code>, which stops at the first <code>&lt;EOS&gt;</code>, drops <code>&lt;SOS&gt;</code> and <code>&lt;PAD&gt;</code>, and writes out-of-vocabulary IDs as the string <code>&lt;UNK&gt;</code>.</p>
+      <p>The <em>reference</em> titles go through the same path: cleaned title, then vocabulary IDs, then words. So a reference word outside the vocabulary also appears as <code>&lt;UNK&gt;</code>.</p>
+    </section>
+
+    <section>
+      <h2>5. Scoring: how ROUGE works</h2>
+      <div class="spec-quote">
+        <span class="box-label">assignment_spec.pdf · B1, task 3</span>
+        <blockquote>"Use the trained model to generate titles for articles in the test set, and calculate the ROUGE-1, ROUGE-2 and ROUGE-L f1 scores."</blockquote>
+      </div>
+      <p><em class="term">ROUGE</em> measures how much a generated title overlaps with the reference title. The project uses the <code>rouge_score</code> library with <code>use_stemmer=True</code>. Both titles are first lowercased, every character that isn't a letter or digit becomes a space (so <code>&lt;UNK&gt;</code> becomes the word "unk"), and words are reduced by the Porter stemmer.</p>
+      <h3>ROUGE-N: overlapping n-grams</h3>
+      <p>An <em class="term">n-gram</em> is a run of \(n\) consecutive words: unigrams for \(n = 1\), bigrams for \(n = 2\). Overlap counts are <em>clipped</em>, so a word the generator repeats can't match more times than it appears in the reference:</p>
+      <div class="eq">
+        \[ \mathrm{match}(g) = \min\big(\mathrm{count}_{\text{gen}}(g),\ \mathrm{count}_{\text{ref}}(g)\big) \]
+        \[ P_N = \frac{\sum_{g} \mathrm{match}(g)}{\sum_{g} \mathrm{count}_{\text{gen}}(g)}, \qquad R_N = \frac{\sum_{g} \mathrm{match}(g)}{\sum_{g} \mathrm{count}_{\text{ref}}(g)}, \qquad F = \frac{2 P R}{P + R} \]
+        <p class="note">The sums run over every distinct n-gram \(g\). <strong>Precision</strong> \(P\) asks what fraction of what was generated is right. <strong>Recall</strong> \(R\) asks what fraction of the reference was recovered. \(F\), their harmonic mean (0 when both are 0), is high only when both are. Generating many words raises recall but lowers precision, and generating one safe word does the opposite.</p>
+      </div>
+      <h3>ROUGE-L: longest common subsequence</h3>
+      <p>A <em class="term">subsequence</em> keeps words in order but may skip some. ROUGE-L uses the length of the longest one the two titles share:</p>
+      <div class="eq">
+        \[ P_L = \frac{\mathrm{LCS}(\text{gen}, \text{ref})}{|\text{gen}|}, \qquad R_L = \frac{\mathrm{LCS}(\text{gen}, \text{ref})}{|\text{ref}|}, \qquad F_L = \frac{2 P_L R_L}{P_L + R_L} \]
+        \[ \mathrm{LCS}(i, j) = \begin{cases} 0 &amp; i = 0 \text{ or } j = 0 \\ \mathrm{LCS}(i-1, j-1) + 1 &amp; \text{gen}_i = \text{ref}_j \\ \max\big(\mathrm{LCS}(i-1, j),\ \mathrm{LCS}(i, j-1)\big) &amp; \text{otherwise} \end{cases} \]
+        <p class="note">\(|\cdot|\) is length in words. \(\mathrm{LCS}(i, j)\) is the answer for the first \(i\) generated words and the first \(j\) reference words, filled in as a table, and the full answer is the bottom-right cell. Unlike ROUGE-2, ROUGE-L rewards words in the right order even when other words sit between them.</p>
+      </div>
+      <div class="worked">
+        <span class="box-label">Worked example 1</span>
+        <p>Reference: "great barrier reef" (3 words) · Generated: "barrier reef coral reef" (4 words)</p>
+        \[ \text{ROUGE-1: } \mathrm{match} = \underbrace{1}_{\text{barrier}} + \underbrace{\min(2, 1)}_{\text{reef}} = 2, \quad P = \tfrac{2}{4},\ R = \tfrac{2}{3},\ F = \frac{2 \cdot 0.5 \cdot 0.667}{0.5 + 0.667} = 0.571 \]
+        \[ \text{ROUGE-2: gen bigrams } \{\text{barrier reef, reef coral, coral reef}\},\ \text{ref } \{\text{great barrier, barrier reef}\} \Rightarrow P = \tfrac13,\ R = \tfrac12,\ F = 0.400 \]
+        \[ \text{ROUGE-L: } \mathrm{LCS} = |\text{barrier reef}| = 2 \Rightarrow P = \tfrac24,\ R = \tfrac23,\ F = 0.571 \]
+      </div>
+      <div class="worked">
+        <span class="box-label">Worked example 2 · when ROUGE-1 and ROUGE-L disagree</span>
+        <p>Reference: "barrier reef" · Generated: "reef barrier"</p>
+        \[ \text{ROUGE-1: } F = 1.0 \qquad \text{ROUGE-2: } F = 0 \qquad \text{ROUGE-L: } \mathrm{LCS} = 1 \Rightarrow F = 0.5 \]
+        <p>ROUGE-1 ignores order entirely, and ROUGE-L penalizes the swap. When a generated title's matching words already appear in the reference's order, as in example 1, LCS equals the unigram match count and the two scores coincide. That's common for short titles, which is why many rows in this project report identical ROUGE-1 and ROUGE-L.</p>
+      </div>
+      <p>The reported number is the mean over the 100 test articles:</p>
+      <div class="eq">
+        \[ \overline{F} = \frac{1}{100}\sum_{k=1}^{100} F^{(k)} \]
+        <p class="note">One consequence is used on the results page: a single article moving from \(F = 0\) to \(F = 1\) shifts the mean by exactly \(0.01\).</p>
+      </div>
+      <h3>The extra word-level F1</h3>
+      <p>The B1 evaluation also treats each title as an unordered <em>set</em> of words \(G_k\) (generated) and \(R_k\) (reference), and pools the counts over all 100 articles before dividing:</p>
+      <div class="eq">
+        \[ \mathrm{TP} = \sum_k |G_k \cap R_k|, \quad \mathrm{FP} = \sum_k |G_k \setminus R_k|, \quad \mathrm{FN} = \sum_k |R_k \setminus G_k| \]
+        \[ P = \frac{\mathrm{TP}}{\mathrm{TP} + \mathrm{FP}}, \qquad R = \frac{\mathrm{TP}}{\mathrm{TP} + \mathrm{FN}}, \qquad F_1 = \frac{2PR}{P+R} \]
+        <p class="note">\(\cap\) is "in both", and \(G \setminus R\) is "in \(G\) but not in \(R\)". TP, FP and FN are true positives, false positives and false negatives. Pooling counts first is called <em>micro-averaging</em>.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>6. The result</h2>
+      <div class="callout result">
+        <span class="box-label">B1 · 100 test articles</span>
+        <p><strong>ROUGE-1 0.2499 · ROUGE-2 0.0976 · ROUGE-L 0.2469</strong><br>Word-level: precision 0.3957 · recall 0.6948 · F1 0.5043</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>7. Why the score is this low: four causes</h2>
+      <h3>Cause 1 · it always writes about ten words</h3>
+      <p>With no <code>&lt;EOS&gt;</code> in any training target, the model essentially never predicts it, so generation runs to the 10-token cap while cleaned reference titles are usually just a few words. Even a perfect hit is capped. Suppose a reference has \(r\) words and all of them appear among 10 generated words:</p>
+      <div class="eq">
+        \[ P = \frac{r}{10},\quad R = 1 \;\Rightarrow\; F = \frac{2 \cdot \frac{r}{10} \cdot 1}{\frac{r}{10} + 1} = \frac{2r}{r + 10} \qquad r = 3:\ F = \tfrac{6}{13} \approx 0.46 \]
+        <p class="note">That's the best case. The word-level numbers show exactly this signature: recall (0.69) far above precision (0.40). The model often does produce the right words, and then keeps producing more.</p>
+      </div>
+      <h3>Cause 2 · word meanings start from nothing</h3>
+      <p>Both embedding tables start as random numbers, and the model gets three passes over the data to learn what 9,215 words mean <em>and</em> how to summarize with them.</p>
+      <h3>Cause 3 · names become <code>&lt;UNK&gt;</code></h3>
+      <p>Titles are dense with names, and names are often rare across articles, so many title words fall below the 1% threshold. The model is trained to output <code>&lt;UNK&gt;</code> in their place. Because the references go through the same vocabulary, a predicted "unk" can match a reference "unk". That match earns ROUGE credit without the model having produced the actual name.</p>
+      <h3>Cause 4 · the fixed-size bottleneck</h3>
+      <p>Everything about an article of hundreds of words must fit into the 600 numbers of \(\mathbf{c}\) (page 2, section 11). The decoder can't look back at specific article words, so it can't copy a specific detail it failed to store.</p>
+      <div class="tbl-wrap">
+      <table>
+        <caption>Where each cause gets addressed</caption>
+        <thead><tr><th>Cause</th><th>Addressed in</th></tr></thead>
+        <tbody>
+          <tr><td>1 · no <code>&lt;EOS&gt;</code>, always ~10 words</td><td>Part B2's evaluation truncates the output instead of fixing the cause. Part C1's tokenizer appends <code>&lt;/s&gt;</code> to every title, so T5 learns to stop.</td></tr>
+          <tr><td>2 · random word meanings</td><td>Part B2 upgrade 1 (GloVe) · Part C1 (a fully pretrained model)</td></tr>
+          <tr><td>3 · names become <code>&lt;UNK&gt;</code></td><td>Part C1 (subword tokenization: no unknown tokens)</td></tr>
+          <tr><td>4 · fixed-size bottleneck</td><td>Part B2 upgrades 2–4 try around it · Part C1 removes it (cross-attention)</td></tr>
+        </tbody>
+      </table>
+      </div>
+    </section>
+
+    <div class="recap"><span class="box-label">Carried forward</span>the B1 architecture and its ~10.1M parameters · the training step and mixed precision · ROUGE-1/2/L and set-based F1, defined exactly · the B1 scores · the four causes of the low score, which organize everything that follows.</div>
+  </main>
+  <div class="pager">
+    <a href="03-part-a-preprocessing.html"><span class="lbl">Back</span>← Part A · Preprocessing</a>
+    <a class="next" href="05-part-b2-improvements.html"><span class="lbl">Next</span>Part B2 · Four upgrades →</a>
+  </div>
+</div>
+</body>
+</html>

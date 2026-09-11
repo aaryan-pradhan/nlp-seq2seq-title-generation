@@ -1,0 +1,280 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Part C1: Attention and T5 · From Article to Headline</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;1,9..144,500&family=IBM+Plex+Sans:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.css">
+<link rel="stylesheet" href="style.css">
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.js"></script>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/contrib/auto-render.min.js"></script>
+<script defer src="render.js"></script>
+</head>
+<body>
+<div class="offline-note">Formulas are typeset by KaTeX, which loads from the internet. Without a connection they show as raw LaTeX.</div>
+<div class="page">
+  <header class="masthead">
+    <div class="crumb"><a href="index.html">Explanations</a><span class="sep">/</span><span class="here">Part C1 · Attention and T5</span></div>
+    <span class="stage-tag">Part C1</span>
+    <h1 class="title">Self-attention, and fine-tuning T5</h1>
+    <p class="dek">The one genuinely new mechanism in the project, built up from the dot product, followed by exactly how the notebook fine-tunes a pretrained T5 model on the article–title pairs.</p>
+  </header>
+  <main>
+
+    <div class="recap"><span class="box-label">Uses</span>dot products, linear layers, ReLU, AdamW and weight decay from <a href="01-neural-network-basics.html">page 1</a> · tokens, softmax, cross-entropy, vanishing gradients, the encoder–decoder bottleneck and teacher forcing from <a href="02-sequence-models.html">page 2</a> · ROUGE and the four causes from <a href="04-part-b1-basic-rnn.html">B1</a> · beam search and length normalization from <a href="05-part-b2-improvements.html">B2</a>.</div>
+
+    <section>
+      <div class="spec-quote">
+        <span class="box-label">assignment_spec.pdf · C1. Attention is all you need!</span>
+        <blockquote>"Transformer models leverage attention mechanisms offering different benefits over RNNs, and have been widely adopted in all NLP tasks. […] In this part, you have to load a pre-trained Seq2seq Transformer model, fine-tune it on the given dataset, and generate and evaluate new titles for the test set articles. T5 models have a max sequence length of 512 tokens, For articles exceeding this, simply truncate the remaining text. […] Use the raw text (with punctuations, stopwords etc.) for this next part."</blockquote>
+      </div>
+      <p>The section heading quotes the title of the 2017 paper that introduced the Transformer. Its central claim is that attention alone, with no recurrence, is enough to model sequences. This page first builds attention from pieces already covered, then shows how T5 assembles it into an encoder–decoder.</p>
+    </section>
+
+    <section>
+      <h2>1. The input changes: raw text, subword tokens</h2>
+      <p>Part C skips Part A's cleaning entirely. The model reads the original article with punctuation, capital letters and stopwords, and learns to produce the original title. Instead of splitting on spaces and looking words up in a 9,215-word vocabulary, T5 uses its own <em class="term">subword tokenizer</em> (SentencePiece), with a vocabulary of about 32,000 pieces:</p>
+      <ul>
+        <li><strong>Common words</strong> are a single piece.</li>
+        <li><strong>Rare words</strong> are split into several smaller pieces that are each in the vocabulary. In the worst case a word is spelled out in very short pieces.</li>
+        <li>A piece starting with "▁" begins a new word, so the original spacing can be reconstructed exactly.</li>
+      </ul>
+      <p>So there's <strong>no unknown token</strong> for ordinary text. A name that would have been <code>&lt;UNK&gt;</code> in Part B is simply spelled with several pieces. That removes B1's cause 3.</p>
+      <p>The tokenizer also <strong>appends an end-of-sequence token <code>&lt;/s&gt;</code></strong> to every sequence, including every training title. By page 2, section 13, the model can therefore learn when to stop. That removes B1's cause 1.</p>
+      <div class="callout impl">
+        <span class="box-label">In the notebook · tokenization settings</span>
+        <p>Articles are truncated to 512 tokens, titles to 64, and both are padded up to exactly those lengths (<code>padding="max_length"</code>). No task prefix (such as "summarize: ") is added to the input.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>2. Attention: looking things up by similarity</h2>
+      <p>Recall the RNN's bottleneck (page 2, section 11): after compressing the article into \(\mathbf{c}\), the decoder never sees the article again. Attention replaces "remember everything in one vector" with <strong>"look back at every position whenever you need to, and take mostly from the relevant ones."</strong></p>
+      <p>Each position produces three vectors from its current representation \(\mathbf{x}_i \in \mathbb{R}^{d}\) using three learned linear layers (page 1, section 2):</p>
+      <div class="eq">
+        \[ \mathbf{q}_i = W^Q \mathbf{x}_i, \qquad \mathbf{k}_i = W^K \mathbf{x}_i, \qquad \mathbf{v}_i = W^V \mathbf{x}_i, \qquad \mathbf{q}_i, \mathbf{k}_i \in \mathbb{R}^{d_k} \]
+        <p class="note">The <strong>query</strong> \(\mathbf{q}_i\) describes what position \(i\) is looking for. The <strong>key</strong> \(\mathbf{k}_j\) describes what position \(j\) contains, for matching. The <strong>value</strong> \(\mathbf{v}_j\) is what position \(j\) hands over if it's selected. All three are learned, so the network decides what counts as relevant.</p>
+      </div>
+      <p>Position \(i\) then scores every position \(j\) with a dot product (page 1, section 1: a similarity score), turns the scores into weights with softmax (page 2, section 5), and takes the weighted average of the values:</p>
+      <div class="eq">
+        \[ \alpha_{ij} = \operatorname{softmax}_j\!\left(\frac{\mathbf{q}_i^\top \mathbf{k}_j}{\sqrt{d_k}}\right) = \frac{\exp\big(\mathbf{q}_i^\top \mathbf{k}_j / \sqrt{d_k}\big)}{\sum_{j'} \exp\big(\mathbf{q}_i^\top \mathbf{k}_{j'} / \sqrt{d_k}\big)}, \qquad \mathbf{z}_i = \sum_j \alpha_{ij}\, \mathbf{v}_j \]
+        <p class="note">The weights \(\alpha_{i1}, \alpha_{i2}, \ldots\) are positive and sum to 1, so \(\mathbf{z}_i\) is a blend of the values, dominated by the positions whose keys best match position \(i\)'s query. Stacking all positions as rows of matrices \(Q\), \(K\), \(V\) gives the compact form:</p>
+        \[ \operatorname{Attention}(Q, K, V) = \operatorname{softmax}\!\left(\frac{QK^\top}{\sqrt{d_k}}\right) V \]
+        <p class="note">\(QK^\top\) is the grid of every query dotted with every key, one row per position, and softmax is applied to each row separately. For \(n\) positions that grid has \(n \times n\) entries. That quadratic cost is why T5 caps inputs at 512 tokens.</p>
+      </div>
+      <div class="worked">
+        <span class="box-label">Worked example · one query, three positions, \(d_k = 2\)</span>
+        \[ \mathbf{q} = (1, 0) \qquad \mathbf{k}_1 = (1, 0),\ \mathbf{k}_2 = (0, 1),\ \mathbf{k}_3 = (1, 1) \qquad \mathbf{v}_1 = (2, 0),\ \mathbf{v}_2 = (0, 2),\ \mathbf{v}_3 = (1, 1) \]
+        \[ \text{scores } \mathbf{q}^\top\mathbf{k}_j = (1,\ 0,\ 1) \;\xrightarrow{\;\div\sqrt{2}\;}\; (0.707,\ 0,\ 0.707) \;\xrightarrow{\;\text{softmax}\;}\; \alpha = (0.401,\ 0.198,\ 0.401) \]
+        \[ \mathbf{z} = 0.401\,(2, 0) + 0.198\,(0, 2) + 0.401\,(1, 1) = (1.203,\ 0.797) \]
+        <p>Positions 1 and 3, whose keys align with the query, each contribute twice as much as position 2, whose key is perpendicular to it.</p>
+      </div>
+      <h3>Why divide by \(\sqrt{d_k}\)?</h3>
+      <p>Suppose the entries of \(\mathbf{q}\) and \(\mathbf{k}\) are independent, with mean 0 and variance 1. Each product \(q_i k_i\) then has variance 1, and a sum of \(d_k\) independent terms has variance \(d_k\):</p>
+      <div class="eq">
+        \[ \operatorname{Var}\big(\mathbf{q}^\top\mathbf{k}\big) = \sum_{i=1}^{d_k} \operatorname{Var}(q_i k_i) = d_k \qquad\Rightarrow\qquad \operatorname{Var}\!\left(\frac{\mathbf{q}^\top\mathbf{k}}{\sqrt{d_k}}\right) = 1 \]
+        <p class="note">With \(d_k = 64\), unscaled scores would typically be about \(\pm 8\) apart. Softmax would then put nearly all weight on a single position, and its derivative, \(\partial p_i / \partial o_j = p_i(\mathbf{1}[i=j] - p_j)\), is close to zero everywhere when one \(p\) is near 1 and the rest near 0. Gradients would vanish, the same failure as page 2, section 8, in a new place. Dividing by \(\sqrt{d_k}\) keeps the scores at unit scale. (T5 itself leaves this division out and gets the same effect by initializing its weights at a correspondingly smaller scale.)</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>3. Multi-head attention</h2>
+      <p>One attention computation produces one kind of blend. Transformers run \(h\) of them in parallel ("heads"), each with its own \(W^Q, W^K, W^V\), and join the results:</p>
+      <div class="eq">
+        \[ \operatorname{head}_m = \operatorname{Attention}\big(XW^Q_m,\ XW^K_m,\ XW^V_m\big), \qquad \operatorname{MultiHead}(X) = \big[\operatorname{head}_1; \ldots; \operatorname{head}_h\big]\, W^O \]
+        <p class="note">Each head can specialize: one might track which word a pronoun refers to, another nearby words. T5-small uses \(h = 8\) heads of size \(d_k = 64\), and \(8 \times 64 = 512\) is the model's vector size. \(W^O\) mixes the joined heads back into one 512-number vector per position.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>4. Word order: relative position biases</h2>
+      <p>Attention as defined has no notion of order. Shuffle the input positions and each position's output is unchanged, just shuffled along with it, because a weighted sum doesn't care about order. But "dog bites man" and "man bites dog" must differ. The original Transformer adds a fixed position-dependent vector to each input embedding. T5 instead adds a learned number to each attention score that depends on how far apart the two positions are:</p>
+      <div class="eq">
+        \[ \alpha_{ij} = \operatorname{softmax}_j\big(\mathbf{q}_i^\top\mathbf{k}_j + b_{\,\mathrm{bucket}(j-i)}\big) \]
+        <p class="note">\(j - i\) is the signed distance from position \(i\) to position \(j\). Distances are grouped into 32 buckets: small distances each get their own bucket, and larger distances share progressively wider ones. Each attention layer's heads can thus learn, for example, to favour the immediately preceding words. The biases are learned once and reused by every layer in the stack.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>5. The Transformer block</h2>
+      <p>Attention is one sub-layer. A full block wraps it, and a small two-layer network, in two further ingredients:</p>
+      <div class="eq">
+        \[ \begin{aligned}
+          \mathbf{x} &amp;\leftarrow \mathbf{x} + \operatorname{MultiHead}\big(\operatorname{Norm}(\mathbf{x})\big) \\
+          \mathbf{x} &amp;\leftarrow \mathbf{x} + \operatorname{FFN}\big(\operatorname{Norm}(\mathbf{x})\big), \qquad \operatorname{FFN}(\mathbf{x}) = W_2\,\operatorname{ReLU}(W_1\mathbf{x})
+        \end{aligned} \]
+        \[ \operatorname{Norm}(\mathbf{x}) = \mathbf{g} \odot \frac{\mathbf{x}}{\sqrt{\frac{1}{d}\sum_{i=1}^{d} x_i^2 + \epsilon}} \]
+        <p class="note"><strong>Residual connections</strong> (the "\(\mathbf{x} +\)"): each sub-layer computes a <em>correction</em> that's added to its input, rather than a full replacement. Differentiating \(\mathbf{x} + f(\mathbf{x})\) gives \(I + \partial f / \partial\mathbf{x}\), an identity term that lets gradients pass straight through many stacked blocks. It's the same idea that made the GRU's update gate work (page 2, section 9). <strong>Normalization</strong>: T5 rescales each vector to unit root-mean-square size, times a learned per-dimension gain \(\mathbf{g}\), which keeps values in a stable range from block to block. The <strong>FFN</strong> processes each position separately. In T5-small, \(W_1\) expands 512 → 2,048 and \(W_2\) projects back.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>6. Encoder, decoder, and the attention that removes the bottleneck</h2>
+      <p>T5 is an encoder–decoder, like the RNN models, but both halves are stacks of blocks. The attention differs in each:</p>
+      <h3>Encoder: full self-attention</h3>
+      <p>Every article position attends to every other article position, in both directions at once, like a bidirectional GRU but in one step rather than one word at a time. After 6 blocks, each of the up to 512 positions holds a vector describing that token in the context of the whole article.</p>
+      <h3>Decoder: masked self-attention</h3>
+      <p>Title position \(t\) may only attend to title positions \(\le t\). Otherwise, during training, it could simply read the word it's supposed to predict. This is enforced by adding \(-\infty\) to forbidden scores before the softmax, which turns their weights into exactly 0:</p>
+      <div class="eq">
+        \[ \operatorname{softmax}\!\left(\frac{QK^\top}{\sqrt{d_k}} + M\right), \qquad M_{tj} = \begin{cases} 0 &amp; j \le t \\ -\infty &amp; j \gt t \end{cases} \]
+        <p class="note">This is the chain rule of page 2, section 4 built into the architecture: position \(t\) sees \(y_{\lt t}\) and nothing later. It also makes teacher forcing fast. All title positions are computed in one parallel pass, where the RNN needed one decoder step per word.</p>
+      </div>
+      <h3>Decoder: cross-attention</h3>
+      <p>Each decoder block also has a cross-attention sub-layer, where <strong>queries come from the title positions and keys and values come from the encoder's final article vectors</strong>:</p>
+      <div class="eq">
+        \[ \operatorname{CrossAttention} = \operatorname{softmax}\!\left(\frac{Q_{\text{title}}\,K_{\text{article}}^\top}{\sqrt{d_k}}\right) V_{\text{article}} \]
+      </div>
+      <div class="figure">
+        <svg viewBox="0 0 660 232" width="660" height="232" role="img" aria-label="The decoder position being generated draws lines to all six encoder positions, with the thickest line to Reef">
+          <text x="20" y="50" font-family="IBM Plex Mono, monospace" font-size="11" fill="var(--good)">decoder</text>
+          <text x="20" y="150" font-family="IBM Plex Mono, monospace" font-size="11" fill="var(--accent)">encoder</text>
+          <g stroke="var(--good)" stroke-linecap="round">
+            <line x1="450" y1="62" x2="67" y2="170" stroke-width="1.2" stroke-opacity="0.3"/>
+            <line x1="450" y1="62" x2="172" y2="170" stroke-width="1.8" stroke-opacity="0.4"/>
+            <line x1="450" y1="62" x2="277" y2="170" stroke-width="2.8" stroke-opacity="0.6"/>
+            <line x1="450" y1="62" x2="382" y2="170" stroke-width="5.4" stroke-opacity="0.95"/>
+            <line x1="450" y1="62" x2="487" y2="170" stroke-width="1.3" stroke-opacity="0.3"/>
+            <line x1="450" y1="62" x2="592" y2="170" stroke-width="1.5" stroke-opacity="0.35"/>
+          </g>
+          <g fill="var(--good-soft)" stroke="var(--good)">
+            <rect x="170" y="30" width="100" height="32" rx="5"/><rect x="285" y="30" width="100" height="32" rx="5"/>
+          </g>
+          <rect x="400" y="30" width="100" height="32" rx="5" fill="var(--paper-raised)" stroke="var(--good)" stroke-width="2" stroke-dasharray="4,3"/>
+          <g fill="var(--accent-soft)" stroke="var(--accent)">
+            <rect x="20" y="170" width="95" height="32" rx="5"/><rect x="125" y="170" width="95" height="32" rx="5"/><rect x="230" y="170" width="95" height="32" rx="5"/><rect x="335" y="170" width="95" height="32" rx="5"/><rect x="440" y="170" width="95" height="32" rx="5"/><rect x="545" y="170" width="95" height="32" rx="5"/>
+          </g>
+          <g font-family="IBM Plex Mono, monospace" font-size="12" text-anchor="middle">
+            <text x="220" y="51" fill="var(--good)">▁Great</text><text x="335" y="51" fill="var(--good)">▁Barrier</text><text x="450" y="51" fill="var(--ink)">next?</text>
+            <text x="67" y="191" fill="var(--accent)">▁The</text><text x="172" y="191" fill="var(--accent)">▁Great</text><text x="277" y="191" fill="var(--accent)">▁Barrier</text><text x="382" y="191" fill="var(--accent)">▁Reef</text><text x="487" y="191" fill="var(--accent)">▁is</text><text x="592" y="191" fill="var(--accent)">▁the</text>
+          </g>
+          <g font-family="IBM Plex Mono, monospace" font-size="10.5" fill="var(--ink-soft)" text-anchor="middle">
+            <text x="67" y="220">0.03</text><text x="172" y="220">0.10</text><text x="277" y="220">0.22</text><text x="382" y="220">0.55</text><text x="487" y="220">0.04</text><text x="592" y="220">0.06</text>
+          </g>
+        </svg>
+        <figcaption>Illustrative weights. At every step, every decoder block scores all encoder positions, and the weights sum to 1.</figcaption>
+      </div>
+      <p><strong>This is what removes B1's cause 4.</strong> The decoder no longer depends on one fixed-size summary. At every step, in every decoder block, it can read any article position directly. Copying the subject's name from the article's first sentence becomes a matter of putting high attention weight on those positions.</p>
+      <p>The last decoder block's vector at each position goes through a linear layer to about 32,000 logits and a softmax, exactly as in page 2, section 5.</p>
+    </section>
+
+    <section>
+      <h2>7. Why T5's weights already work: pretraining</h2>
+      <p>A Transformer this size, trained from scratch on 13,379 articles, would face B1's cause 2 on a much larger scale. T5 avoids that because Google pretrained it before release on <strong>C4</strong>, about 750 GB of cleaned English web text. The pretraining task is <em class="term">span corruption</em>. Random spans (about 15% of tokens, in spans averaging 3 tokens) are replaced by placeholder tokens, and the model must generate the missing pieces:</p>
+      <div class="example">
+        <div class="row"><span class="who">Original</span><span>Thank you for inviting me to your party last week.</span></div>
+        <div class="row"><span class="who">Input</span><span>Thank you &lt;X&gt; me to your party &lt;Y&gt; week.</span></div>
+        <div class="row"><span class="who">Target</span><span>&lt;X&gt; for inviting &lt;Y&gt; last &lt;Z&gt;</span></div>
+      </div>
+      <p>To fill such gaps reliably across billions of examples, the model has to learn grammar, word meaning and a great deal of world knowledge, all without labels. This is the same encoder–decoder, cross-entropy, text-in/text-out setup as title generation, so fine-tuning changes the <em>task</em> but not the <em>machinery</em>. According to its model card, the released T5 checkpoint was pretrained on a mixture that also included supervised tasks such as summarization.</p>
+      <div class="tbl-wrap">
+      <table>
+        <caption>google-t5/t5-small</caption>
+        <thead><tr><th>Property</th><th>Value</th></tr></thead>
+        <tbody>
+          <tr><td>Encoder / decoder blocks</td><td>6 / 6</td></tr>
+          <tr><td>Vector size \(d\)</td><td>512</td></tr>
+          <tr><td>Attention heads × head size</td><td>8 × 64</td></tr>
+          <tr><td>FFN inner size</td><td>2,048</td></tr>
+          <tr><td>Vocabulary</td><td>about 32,000 SentencePiece pieces</td></tr>
+          <tr><td>Parameters</td><td>about 60 million (B1's RNN: about 10.1 million)</td></tr>
+        </tbody>
+      </table>
+      </div>
+    </section>
+
+    <section>
+      <h2>8. Fine-tuning in the notebook</h2>
+      <div class="spec-quote">
+        <span class="box-label">assignment_spec.pdf · C1 tasks</span>
+        <blockquote>"1. Load the pretrained google-t5/t5-small model using the AutoModelForSeq2SeqLM class. 2. Train the model using the Seq2SeqTrainer on the training and validation data, while trying different hyperparameters in Seq2seqTrainingArguments. 3. Generate predictions on the test set and calculate the ROUGE metrics as in Part B, greedily and by beam search."</blockquote>
+      </div>
+      <p><em class="term">Fine-tuning</em> means continuing to train the pretrained weights, all of them here, on the new task, starting from where pretraining left off rather than from random numbers.</p>
+      <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Setting</th><th>Value</th><th>Why it matters</th></tr></thead>
+        <tbody>
+          <tr><td>Training / validation data</td><td>13,379 / 500 articles</td><td>the last 500 training rows are held out and scored after every epoch</td></tr>
+          <tr><td>Learning rate</td><td>\(2 \times 10^{-5}\)</td><td>50× smaller than the RNN's: nudge good weights, don't overwrite them</td></tr>
+          <tr><td>Batch size</td><td>8 per GPU</td><td>see the step count below</td></tr>
+          <tr><td>Epochs</td><td>3</td><td>2,511 steps in total</td></tr>
+          <tr><td>Optimizer</td><td>AdamW, weight decay 0.01</td><td>Adam plus decoupled weight decay (page 1, sections 9 and 11)</td></tr>
+          <tr><td>Learning-rate schedule</td><td>linear decay to 0 (library default)</td><td>\(\eta_s = \eta_0\,(1 - s/S)\): large steps early, small ones at the end</td></tr>
+          <tr><td>Logging</td><td>TensorBoard, every 100 steps</td><td>training curves visible while it runs</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <div class="eq">
+        \[ \frac{2{,}511 \text{ steps}}{3 \text{ epochs}} = 837 \text{ steps per epoch}, \qquad \left\lceil \frac{13{,}379}{16} \right\rceil = 837 \quad\text{but}\quad \left\lceil \frac{13{,}379}{8} \right\rceil = 1{,}673 \]
+        <p class="note">\(\lceil\cdot\rceil\) rounds up, since the trainer keeps the last partial batch. The logged step count matches 16 articles per step, not 8. That implies the Kaggle session used two GPUs at 8 articles each.</p>
+      </div>
+      <h3>The loss</h3>
+      <p>The same maximum-likelihood cross-entropy as page 2, section 6, with teacher forcing. The decoder receives the title shifted one place right (a start token, then \(y_1, \ldots, y_{T-1}\)) and is trained to predict \(y_1, \ldots, y_T\). The causal mask lets every position be computed at once.</p>
+      <div class="callout impl">
+        <span class="box-label">In the notebook · why the losses look so tiny</span>
+        <p>HuggingFace only skips label positions set to <code>-100</code>. The notebook pads labels to 64 with T5's padding ID (0) and doesn't replace them, so <strong>padding positions are included in the loss</strong>. Most of the 64 positions are padding, and predicting "padding follows <code>&lt;/s&gt;</code>" is learned almost immediately, so their loss is near zero and pulls the average down. Suppose, for illustration, a title uses 7 real positions and padding contributes about 0:</p>
+        \[ \mathcal{L}_{\text{avg}} \approx \frac{7\,\ell_{\text{real}} + 57 \cdot 0}{64} \;\Rightarrow\; \ell_{\text{real}} \approx \frac{64}{7} \times 0.041 \approx 0.37 \]
+        <p>So these values can't be compared with the RNN losses, which excluded padding and used a different vocabulary.</p>
+      </div>
+      <div class="tbl-wrap">
+      <table>
+        <caption>Fine-tuning log · 1,078.94 s in total</caption>
+        <thead><tr><th>Epoch</th><th class="num">Training loss</th><th class="num">Validation loss</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td class="num">0.0678</td><td class="num">0.0527</td></tr>
+          <tr><td>2</td><td class="num">0.0489</td><td class="num">0.0430</td></tr>
+          <tr><td>3</td><td class="num">0.0459</td><td class="num">0.0409</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p>Validation loss falls every epoch, so there's no sign of overfitting (page 1, section 10) within three epochs. More epochs might still have helped.</p>
+      <div class="spec-quote">
+        <span class="box-label">docs/report.pdf</span>
+        <blockquote>"The HuggingFace datasets.Dataset class was chosen over traditional PyTorch DataLoader for seamless integration with Seq2SeqTrainer, simplifying preprocessing and improving training flow. The training setup utilized Seq2SeqTrainingArguments for clean hyperparameter control, enabled predict_with_generate for proper evaluation using generated sequences, and incorporated TensorBoard logging to visualize training metrics every 100 steps."</blockquote>
+      </div>
+    </section>
+
+    <section>
+      <h2>9. Generating the test titles</h2>
+      <p>Each of the 100 test articles is tokenized (truncated to 512), moved to the GPU and passed to <code>model.generate(num_beams=5, early_stopping=True)</code>, one article at a time. That's the beam search of Part B2, with these library behaviours:</p>
+      <ul>
+        <li>Beams are scored with <strong>true log-probabilities</strong> (softmax applied), unlike the RNN implementation.</li>
+        <li>Finished beams are compared with <strong>length normalization</strong>, \(\alpha = 1\) (Part B2).</li>
+        <li><code>early_stopping=True</code> ends the search as soon as 5 finished candidates exist, and T5 does emit <code>&lt;/s&gt;</code>, so it actually happens.</li>
+        <li>With no explicit length set, the library's default cap of 20 tokens applies.</li>
+      </ul>
+      <p>The spec asks for scores "greedily and by beam search". Only the beam search result is reported.</p>
+    </section>
+
+    <section>
+      <h2>10. The result, and why it's so much higher</h2>
+      <div class="callout result">
+        <span class="box-label">C1 · T5-small fine-tuned · 100 test articles</span>
+        <p><strong>ROUGE-1 0.8626 · ROUGE-2 0.6516 · ROUGE-L 0.8626</strong><br>Scored with <code>rouge_score</code> and the Porter stemmer, as in Part B, against the raw titles.</p>
+      </div>
+      <div class="tbl-wrap">
+      <table>
+        <caption>B1's four causes, revisited</caption>
+        <thead><tr><th>Cause in B1</th><th>What T5 does instead</th></tr></thead>
+        <tbody>
+          <tr><td>1 · never learned to stop</td><td><code>&lt;/s&gt;</code> ends every training title, so outputs are title-length on their own</td></tr>
+          <tr><td>2 · random word meanings</td><td>all ~60M parameters come pretrained on C4</td></tr>
+          <tr><td>3 · names become <code>&lt;UNK&gt;</code></td><td>subword pieces can spell any name</td></tr>
+          <tr><td>4 · fixed-size bottleneck</td><td>cross-attention reads all article positions at every step</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p><strong>The subject is usually named in the first sentence.</strong> By Wikipedia's style convention, an article's opening sentence names its subject, usually in the title's own wording ("The Great Barrier Reef is…"). Truncation keeps the first 512 tokens, so that sentence is always in the input. A model with cross-attention can learn to find and copy the subject phrase, and that's what makes scores in the high 0.8s achievable at all.</p>
+      <p><strong>A caveat on comparing with Part B.</strong> Part B's references were the cleaned, vocabulary-mapped titles, and Part C's are the raw titles, so this isn't a strictly like-for-like comparison. But the gap, from 0.33 (the last B2 run) or 0.50 (GloVe) to 0.86, is far larger than anything those differences could explain.</p>
+      <p>T5-small has about six times the RNN's parameters, but size isn't the main story: cause 2 alone was shown in B2 to matter enormously. What T5 contributes is pretrained knowledge <em>plus</em> an architecture that can use the article directly.</p>
+    </section>
+
+    <div class="recap"><span class="box-label">Carried forward</span>query/key/value attention, scaling, multi-head, relative position biases · residual blocks · masked self-attention and cross-attention · pretraining by span corruption · fine-tuning with AdamW and a linear schedule · HuggingFace beam search with length normalization · C1's score of 0.8626 ROUGE-L, the reference point for Part C2.</div>
+  </main>
+  <div class="pager">
+    <a href="05-part-b2-improvements.html"><span class="lbl">Back</span>← Part B2 · Four upgrades</a>
+    <a class="next" href="07-part-c2-prompting.html"><span class="lbl">Next</span>Part C2 · Prompting Flan-T5 →</a>
+  </div>
+</div>
+</body>
+</html>

@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>From Article to Headline</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;1,9..144,500&family=IBM+Plex+Sans:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="style.css">
+<style>
+  .toc{ list-style:none; margin:0 0 40px; padding:0; border-left:2px solid var(--rule); }
+  .toc li{ position:relative; padding:14px 0 14px 22px; border-bottom:1px solid var(--rule); max-width:none; margin:0; }
+  .toc li::before{ content:''; position:absolute; left:-7px; top:22px; width:12px; height:12px; border-radius:50%; background:var(--paper); border:2px solid var(--accent); }
+  .toc li.pre::before{ border-color:var(--ink-soft); }
+  .toc a{ text-decoration:none; display:block; }
+  .toc a:hover .name{ color:var(--accent); }
+  .toc .num{ font-family:'IBM Plex Mono', ui-monospace, Menlo, monospace; font-size:11px; color:var(--accent); text-transform:uppercase; letter-spacing:.08em; display:block; margin-bottom:4px; }
+  .toc li.pre .num{ color:var(--ink-soft); }
+  .toc .name{ font-family:'Fraunces', Georgia, serif; font-size:19px; font-weight:600; color:var(--ink); }
+  .toc .desc{ font-size:14.5px; color:var(--ink-soft); margin-top:4px; max-width:60ch; }
+  .legend{ display:grid; grid-template-columns:repeat(auto-fit, minmax(210px, 1fr)); gap:12px; margin:16px 0 8px; }
+  .legend > div{ margin:0; font-size:14px; padding:12px 14px; }
+  .legend p{ margin:0; }
+</style>
+</head>
+<body>
+<div class="page">
+  <header class="masthead">
+    <div class="crumb"><span class="here">Explanations</span></div>
+    <h1 class="title">From Article to Headline</h1>
+    <p class="dek">A from-scratch walkthrough of the Seq2Seq title-generation project, from the first matrix multiplication to fine-tuned Transformers. Read in order: each page uses only ideas the pages before it have already built.</p>
+  </header>
+  <main>
+    <section>
+      <div class="spec-quote">
+        <span class="box-label">assignment_spec.pdf · Overview</span>
+        <blockquote>"In this assignment, we will use Deep Neural Network (DNN) based language models to generate titles for new Wikipedia articles, given the body text. Specifically, we shall train a Sequence to Sequence (Seq2seq) model that encodes an input sequence of tokens and then generates a desired sequence of tokens, using Recurrent Neural Networks (RNN) and Transformers. Such kinds of seq2seq models are useful for tasks like translation and summarization, and the "title-generation" task of this assignment can be considered as a form of extreme document compression. Finally, we shall try to improve different parts of the model for better performance."</blockquote>
+      </div>
+      <p>Pages 1 and 2 build the prerequisites that sentence assumes. Every page after that opens with the assignment brief's own description of its part, explains it using only what came before, and says exactly what the notebook implemented.</p>
+    </section>
+
+    <ol class="toc">
+      <li class="pre"><a href="01-neural-network-basics.html"><span class="num">Prerequisite 1</span><span class="name">Neural network basics</span></a><div class="desc">Vectors and dot products, layers, activations, loss, gradient descent, backpropagation, Adam, training/validation/test, dropout, weight decay, gradient clipping.</div></li>
+      <li class="pre"><a href="02-sequence-models.html"><span class="num">Prerequisite 2</span><span class="name">Sequence models</span></a><div class="desc">Tokens and embeddings, the chain rule of probability, softmax and cross-entropy (derived), RNNs and vanishing gradients, the GRU, the encoder–decoder and its bottleneck, teacher forcing, greedy decoding.</div></li>
+      <li><a href="03-part-a-preprocessing.html"><span class="num">Part A</span><span class="name">Preprocessing</span></a><div class="desc">The exact cleaning rule, a token-by-token worked example, why lemmatization, why spaCy batching was 3.8× faster, and what cleaning costs later.</div></li>
+      <li><a href="04-part-b1-basic-rnn.html"><span class="num">Part B1</span><span class="name">The basic RNN Seq2Seq model</span></a><div class="desc">Vocabulary, every tensor shape and parameter count, one training step, mixed precision, ROUGE with worked examples, and four causes of the 0.25 score.</div></li>
+      <li><a href="05-part-b2-improvements.html"><span class="num">Part B2</span><span class="name">Four upgrades to the RNN</span></a><div class="desc">GloVe, the hierarchical encoder, the two-GRU decoder and beam search, each shown as the spec describes it and as the notebook implements it, plus what the runs can and can't show.</div></li>
+      <li><a href="06-part-c1-transformer.html"><span class="num">Part C1</span><span class="name">Self-attention, and fine-tuning T5</span></a><div class="desc">Subword tokens, attention from the dot product up, multi-head attention, position biases, masked and cross-attention, pretraining, and the fine-tuning run.</div></li>
+      <li><a href="07-part-c2-prompting.html"><span class="num">Part C2</span><span class="name">Prompting Flan-T5, zero-shot</span></a><div class="desc">Instruction tuning, zero-shot vs. few-shot vs. fine-tuning, the two prompts, and why a model never trained on this data tied with one that was.</div></li>
+      <li><a href="08-results-and-takeaways.html"><span class="num">Wrap-up</span><span class="name">All results, and what they support</span></a><div class="desc">Every score with its measurement conditions, which comparisons are fair, the time for each part, and four conclusions.</div></li>
+    </ol>
+
+    <section>
+      <h2>How to read the boxes</h2>
+      <div class="legend">
+        <div class="spec-quote"><span class="box-label">From the spec or report</span><p>Verbatim from <code>assignment_spec.pdf</code> or <code>report.pdf</code>.</p></div>
+        <div class="callout impl"><span class="box-label">In the notebook</span><p>What the code actually does, especially where it differs from the spec.</p></div>
+        <div class="callout fix"><span class="box-label">Bug hit and fixed</span><p>Problems recorded in the report, and how they were solved.</p></div>
+        <div class="callout result"><span class="box-label">Result</span><p>Numbers from the notebook outputs and report.</p></div>
+        <div class="worked"><span class="box-label">Worked example</span><p>A formula applied to small, concrete numbers.</p></div>
+      </div>
+    </section>
+  </main>
+</div>
+</body>
+</html>

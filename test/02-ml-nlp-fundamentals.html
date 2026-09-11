@@ -1,0 +1,455 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>ML and NLP Fundamentals · Interview Prep</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;1,9..144,500&family=IBM+Plex+Sans:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.css">
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="qa.css">
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.js"></script>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/contrib/auto-render.min.js"></script>
+<script defer src="render.js"></script>
+</head>
+<body>
+<div class="offline-note">Formulas are typeset by KaTeX, which loads from the internet. Without a connection they show as raw LaTeX.</div>
+<div class="page">
+  <header class="masthead">
+    <div class="crumb"><a href="index.html">Interview prep</a><span class="sep">/</span><span class="here">2 · ML and NLP fundamentals</span></div>
+    <span class="stage-tag">25 questions</span>
+    <h1 class="title">ML and NLP fundamentals</h1>
+    <p class="dek">The core concepts an entry-level data science interview checks, answered at the depth a good candidate gives out loud: definition, the key formula where one exists, when it matters, and a link back to your project where one fits.</p>
+  </header>
+  <main>
+
+    <nav class="qindex" aria-label="Questions on this page">
+      <h2>Questions</h2>
+      <div class="group">Machine learning</div>
+      <ul>
+        <li><a href="#m1"><span class="qn">M1</span>Bias–variance trade-off</a></li>
+        <li><a href="#m2"><span class="qn">M2</span>Detecting and preventing overfitting</a></li>
+        <li><a href="#m3"><span class="qn">M3</span>Validation, test and cross-validation</a></li>
+        <li><a href="#m4"><span class="qn">M4</span>Data leakage</a></li>
+        <li><a href="#m5"><span class="qn">M5</span>Precision, recall, F1</a></li>
+        <li><a href="#m6"><span class="qn">M6</span>ROC-AUC vs. PR-AUC</a></li>
+        <li><a href="#m7"><span class="qn">M7</span>Imbalanced classes</a></li>
+        <li><a href="#m8"><span class="qn">M8</span>L1 vs. L2 regularization</a></li>
+        <li><a href="#m9"><span class="qn">M9</span>Logistic regression</a></li>
+        <li><a href="#m10"><span class="qn">M10</span>Random forest vs. gradient boosting</a></li>
+        <li><a href="#m11"><span class="qn">M11</span>When feature scaling matters</a></li>
+        <li><a href="#m12"><span class="qn">M12</span>Missing values</a></li>
+        <li><a href="#m13"><span class="qn">M13</span>Gradient descent variants and Adam</a></li>
+        <li><a href="#m14"><span class="qn">M14</span>Vanishing and exploding gradients</a></li>
+      </ul>
+      <div class="group">NLP</div>
+      <ul>
+        <li><a href="#n1"><span class="qn">N1</span>Word vs. subword tokenization</a></li>
+        <li><a href="#n2"><span class="qn">N2</span>TF-IDF</a></li>
+        <li><a href="#n3"><span class="qn">N3</span>Word embeddings, static and contextual</a></li>
+        <li><a href="#n4"><span class="qn">N4</span>RNN vs. LSTM vs. GRU</a></li>
+        <li><a href="#n5"><span class="qn">N5</span>Self-attention</a></li>
+        <li><a href="#n6"><span class="qn">N6</span>Transformers vs. RNNs</a></li>
+        <li><a href="#n7"><span class="qn">N7</span>BERT vs. GPT vs. T5</a></li>
+        <li><a href="#n8"><span class="qn">N8</span>Decoding: greedy, beam, sampling</a></li>
+        <li><a href="#n9"><span class="qn">N9</span>BLEU, ROUGE, BERTScore, perplexity</a></li>
+        <li><a href="#n10"><span class="qn">N10</span>Fine-tuning vs. prompting vs. LoRA vs. RAG</a></li>
+        <li><a href="#n11"><span class="qn">N11</span>Hallucination in summarization</a></li>
+      </ul>
+    </nav>
+
+    <!-- ============ ML ============ -->
+    <section class="qa-section">
+      <h2>Machine learning</h2>
+
+      <article class="qa" id="m1">
+        <div class="qa-id">M1</div>
+        <h3 class="q">Explain the bias–variance trade-off.</h3>
+        <p class="tests"><span class="box-label">Tests</span>The central idea behind model complexity and generalization.</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+          <p>A model's expected error on new data splits into three parts:</p>
+          \[ \mathbb{E}\big[(y - \hat{f}(x))^2\big] = \underbrace{\mathrm{Bias}\big[\hat{f}(x)\big]^2}_{\text{wrong assumptions}} + \underbrace{\mathrm{Var}\big[\hat{f}(x)\big]}_{\text{sensitivity to the training sample}} + \underbrace{\sigma^2}_{\text{irreducible noise}} \]
+          <p><strong>Bias</strong> is error from a model too simple to capture the pattern, like a straight line fitted to a curve. That's underfitting. <strong>Variance</strong> is error from a model so flexible that it fits the noise in its particular training sample and changes a lot when trained on a different one. That's overfitting. Making a model more complex usually lowers bias and raises variance, so the goal is the complexity that minimizes their sum. Regularization, more data and ensembling are the main tools for reducing variance without adding much bias.</p>
+        </div>
+      </article>
+
+      <article class="qa" id="m2">
+        <div class="qa-id">M2</div>
+        <h3 class="q">How do you detect overfitting, and how do you prevent it?</h3>
+        <p class="tests"><span class="box-label">Tests</span>Practical diagnostics plus a toolbox.</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+          <p><strong>Detect it</strong> by comparing training and validation performance. Overfitting shows up as training loss continuing to fall while validation loss flattens or rises, or as a large gap between training and validation metrics.</p>
+          <p><strong>Prevent it</strong> with:</p>
+          <ul>
+            <li>more or augmented data;</li>
+            <li>a simpler model;</li>
+            <li>regularization, such as L1/L2 or weight decay;</li>
+            <li>dropout;</li>
+            <li>early stopping on the validation metric;</li>
+            <li>for trees, limiting depth or requiring more samples per leaf;</li>
+            <li>ensembling.</li>
+          </ul>
+          <p>In my project, the fine-tuned T5's validation loss fell every epoch, so it wasn't overfitting. And I froze the GloVe embeddings partly to avoid overfitting 2.8 million parameters on a small dataset.</p>
+        </div>
+      </article>
+
+      <article class="qa" id="m3">
+        <div class="qa-id">M3</div>
+        <h3 class="q">Why have both a validation set and a test set? What is cross-validation?</h3>
+        <p class="tests"><span class="box-label">Tests</span>Evaluation design, including time-ordered data.</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+          <p>The <strong>validation set</strong> is for making choices: hyperparameters, features, which model. Every choice made by looking at it slightly tunes the model to that set, so its score becomes optimistic. The <strong>test set</strong> is kept untouched until the end, so it gives an unbiased estimate of performance on new data.</p>
+          <p><strong>k-fold cross-validation</strong> splits the training data into \(k\) parts, trains \(k\) times with each part held out once, and averages the scores. It gives a more stable estimate than one validation split, which matters most for small datasets. Use <strong>stratified</strong> folds to preserve class ratios. For time-ordered data such as transactions, use <strong>time-based splits</strong> (train on the past, validate on the future), because random folds would let the model learn from the future.</p>
+        </div>
+      </article>
+
+      <article class="qa" id="m4">
+        <div class="qa-id">M4</div>
+        <h3 class="q">What is data leakage? Give examples.</h3>
+        <p class="tests"><span class="box-label">Tests</span>One of the most common real-world failure modes, especially in finance.</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+          <p>Leakage is when information that wouldn't be available at prediction time gets into training, so offline scores look great and production performance collapses. Common forms:</p>
+          <ul>
+            <li><strong>Target leakage:</strong> a feature derived from the outcome, such as using "chargeback filed" to predict fraud. The chargeback only exists <em>because</em> fraud happened.</li>
+            <li><strong>Train–test contamination:</strong> fitting a scaler, imputer or oversampler on the full dataset before splitting.</li>
+            <li><strong>Temporal leakage:</strong> random splits on time series, or features like "average spend over the whole year" used to score a transaction in March.</li>
+            <li><strong>Duplicate entities</strong> across splits, such as the same customer in both training and test data.</li>
+          </ul>
+          <p>Prevention comes down to splitting first, fitting all preprocessing on training data only (pipelines help), and asking of every feature: would I actually know this at the moment of prediction?</p>
+        </div>
+      </article>
+
+      <article class="qa" id="m5">
+        <div class="qa-id">M5</div>
+        <h3 class="q">Define precision, recall and F1. When would you prioritize each?</h3>
+        <p class="tests"><span class="box-label">Tests</span>Metric choice tied to business cost.</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+          \[ \text{Precision} = \frac{TP}{TP + FP}, \qquad \text{Recall} = \frac{TP}{TP + FN}, \qquad F_1 = \frac{2 \cdot \text{Precision} \cdot \text{Recall}}{\text{Precision} + \text{Recall}} \]
+          <p>Precision asks: of everything I flagged, how much was really positive? Recall asks: of all real positives, how many did I catch? F1 is their harmonic mean, which is high only if both are.</p>
+          <ul>
+            <li><strong>Prioritize recall</strong> when a miss is costly, as in fraud detection or disease screening.</li>
+            <li><strong>Prioritize precision</strong> when false alarms are costly, such as blocking a legitimate customer's card or sending a spam warning on a real email.</li>
+          </ul>
+          <p>In practice you choose a decision threshold that balances the two using the actual costs. \(F_\beta\) weights recall \(\beta\) times as much as precision. My basic RNN had recall 0.69 but precision 0.40, because it always generated ten words: it caught the right words but padded them with wrong ones.</p>
+        </div>
+      </article>
+
+      <article class="qa" id="m6">
+        <div class="qa-id">M6</div>
+        <h3 class="q">ROC-AUC or PR-AUC: which would you use for fraud detection?</h3>
+        <p class="tests"><span class="box-label">Tests</span>Understanding how class imbalance affects metrics.</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+          <p>The <strong>ROC curve</strong> plots true positive rate against false positive rate across all thresholds. Its AUC equals the probability that a randomly chosen positive is scored above a randomly chosen negative. The <strong>precision–recall curve</strong> plots precision against recall.</p>
+          <p>For fraud, where positives might be 0.1% of transactions, I'd lead with <strong>PR-AUC</strong>. The false positive rate divides by the huge number of legitimate transactions, so even thousands of false alarms look like a tiny rate, and ROC-AUC stays high while precision is poor. PR-AUC exposes that, and its no-skill baseline equals the positive rate (0.001 here) rather than 0.5. I'd still report ROC-AUC for ranking quality, and pick the operating threshold from precision and recall at the review capacity the business has.</p>
+        </div>
+      </article>
+
+      <article class="qa" id="m7">
+        <div class="qa-id">M7</div>
+        <h3 class="q">How do you handle a heavily imbalanced dataset?</h3>
+        <p class="tests"><span class="box-label">Tests</span>A layered, practical answer rather than just "SMOTE".</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+          <ol>
+            <li><strong>Use the right metrics:</strong> precision, recall, PR-AUC, and cost-weighted measures. Not accuracy, since predicting "never fraud" is 99.9% accurate.</li>
+            <li><strong>Reweight the loss</strong> with class weights so errors on the rare class cost more. It's often the simplest and best first step.</li>
+            <li><strong>Resample the training data only:</strong> undersample the majority class, or oversample the minority (random oversampling or SMOTE). Do it inside each cross-validation fold, after splitting, to avoid leakage.</li>
+            <li><strong>Tune the decision threshold</strong> instead of using 0.5.</li>
+            <li><strong>Choose models that cope well,</strong> such as gradient boosting with class weights. For extremely rare positives, consider framing it as anomaly detection.</li>
+          </ol>
+          <p>Resampling changes the predicted probabilities, so recalibrate them if the scores are used as real probabilities.</p>
+        </div>
+      </article>
+
+      <article class="qa" id="m8">
+        <div class="qa-id">M8</div>
+        <h3 class="q">What's the difference between L1 and L2 regularization?</h3>
+        <p class="tests"><span class="box-label">Tests</span>The formulas, and why L1 produces sparsity.</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+          \[ \text{L1 (Lasso): } \mathcal{L} + \lambda\sum_j |w_j| \qquad\qquad \text{L2 (Ridge): } \mathcal{L} + \lambda\sum_j w_j^2 \]
+          <p>Both penalize large weights to reduce overfitting, and \(\lambda\) controls the strength. <strong>L2</strong> shrinks all weights smoothly towards zero but rarely to exactly zero, and handles correlated features well by spreading weight across them. <strong>L1</strong> drives some weights to exactly zero, performing feature selection. Its penalty's gradient has constant magnitude \(\lambda\) however small the weight, so small weights get pushed all the way to zero. Geometrically, the L1 constraint region is a diamond whose corners lie on the axes, and the optimum often lands on a corner. <strong>Elastic net</strong> combines the two. Weight decay in neural networks is essentially L2.</p>
+        </div>
+      </article>
+
+      <article class="qa" id="m9">
+        <div class="qa-id">M9</div>
+        <h3 class="q">How does logistic regression work, and how do you interpret its coefficients?</h3>
+        <p class="tests"><span class="box-label">Tests</span>The workhorse model for credit and risk scoring.</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+          <p>It models the log-odds of the positive class as a linear function of the features, and passes that through the sigmoid function to get a probability:</p>
+          \[ \log\frac{p}{1-p} = \mathbf{w}^\top\mathbf{x} + b, \qquad p = \sigma(\mathbf{w}^\top\mathbf{x} + b) = \frac{1}{1 + e^{-(\mathbf{w}^\top\mathbf{x} + b)}} \]
+          <p>It's trained by minimizing log-loss, which is convex, so gradient descent finds the global minimum:</p>
+          \[ \mathcal{L} = -\frac{1}{N}\sum_{i=1}^{N}\big[y_i \log p_i + (1 - y_i)\log(1 - p_i)\big] \]
+          <p><strong>Interpretation:</strong> a one-unit increase in \(x_j\), holding the other features fixed, multiplies the odds by \(e^{w_j}\). For example, \(w_j = 0.4\) means the odds rise by a factor of about 1.49. That transparency is why it remains standard in regulated settings like credit decisions, where each factor's effect has to be explainable.</p>
+        </div>
+      </article>
+
+      <article class="qa" id="m10">
+        <div class="qa-id">M10</div>
+        <h3 class="q">Random forest vs. gradient boosting: how do they differ, and when would you use each?</h3>
+        <p class="tests"><span class="box-label">Tests</span>Ensemble methods, the default for tabular data.</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+          <p><strong>Random forest</strong> trains many deep trees <em>in parallel</em>, each on a bootstrap sample of the rows and considering a random subset of features at each split, then averages them. Averaging many decorrelated, high-variance trees <strong>reduces variance</strong>. It's robust, hard to overfit badly, and needs little tuning.</p>
+          <p><strong>Gradient boosting</strong> (XGBoost, LightGBM, CatBoost) trains shallow trees <em>sequentially</em>. Each new tree fits the gradient of the loss with respect to the current ensemble's predictions (for squared error, simply the residuals), scaled by a learning rate. This <strong>reduces bias</strong> step by step. It usually gives the best accuracy on tabular problems like credit risk or fraud, but it needs tuning (learning rate, number of trees, depth) and early stopping, because too many trees overfit.</p>
+          <p>My default: random forest for a quick, strong baseline, and gradient boosting when squeezing out performance matters.</p>
+        </div>
+      </article>
+
+      <article class="qa" id="m11">
+        <div class="qa-id">M11</div>
+        <h3 class="q">When does feature scaling matter, and when doesn't it?</h3>
+        <p class="tests"><span class="box-label">Tests</span>Knowing <em>why</em> models are scale-sensitive.</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+          <p>Scaling matters for models that use <strong>distances</strong> (k-NN, k-means, SVM with RBF kernels), <strong>variance</strong> (PCA), or <strong>gradient descent and penalties</strong> (linear and logistic regression with regularization, neural networks). Otherwise a feature measured in large units, such as income in rupees, dominates one in small units, such as age, and a regularization penalty treats their coefficients unequally.</p>
+          <p><strong>Tree-based models</strong> don't need it, since splits only depend on the order of values. The two common methods are standardization, \(z = (x - \mu)/\sigma\), and min–max scaling to [0, 1]. Either way, fit the scaler on training data only.</p>
+        </div>
+      </article>
+
+      <article class="qa" id="m12">
+        <div class="qa-id">M12</div>
+        <h3 class="q">How do you handle missing values?</h3>
+        <p class="tests"><span class="box-label">Tests</span>Thinking about <em>why</em> data is missing before choosing a fix.</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+          <p>First ask why it's missing. <strong>Missing completely at random</strong> is harmless apart from lost data. <strong>Missing at random</strong> means missingness depends on other observed features. <strong>Missing not at random</strong> means it depends on the missing value itself, for example high earners declining to state income. Then the fact that it's missing is itself informative.</p>
+          <p>Options, roughly in order of effort:</p>
+          <ul>
+            <li>drop rows or columns, if missingness is rare or a column is mostly empty;</li>
+            <li>impute the median for skewed numbers, the mean, or the mode or an "Unknown" category;</li>
+            <li>add a <strong>missing-indicator</strong> feature so the model can learn from missingness;</li>
+            <li>model-based imputation (k-NN, iterative);</li>
+            <li>models that handle missing values natively, like XGBoost and LightGBM.</li>
+          </ul>
+          <p>Always compute imputation statistics on the training set only.</p>
+        </div>
+      </article>
+
+      <article class="qa" id="m13">
+        <div class="qa-id">M13</div>
+        <h3 class="q">Batch, stochastic and mini-batch gradient descent: what's the difference, and what does Adam add?</h3>
+        <p class="tests"><span class="box-label">Tests</span>Optimization basics.</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+          <p>All three repeat the same update, \(\theta \leftarrow \theta - \eta\nabla_\theta\mathcal{L}\). They differ in how much data each gradient uses:</p>
+          <ul>
+            <li><strong>Batch</strong> uses the full dataset: accurate but slow per step.</li>
+            <li><strong>Stochastic</strong> uses one example: very noisy, but cheap.</li>
+            <li><strong>Mini-batch</strong> uses, say, 8 to 512 examples. It balances the two and suits GPUs, so it's the standard.</li>
+          </ul>
+          <p><strong>Adam</strong> adds two running averages per parameter: of the gradient (momentum, which smooths noise) and of the squared gradient, which gives each parameter its own adaptive step size. That makes it robust to the learning-rate choice and to badly scaled gradients.</p>
+          \[ \theta \leftarrow \theta - \eta\,\frac{\hat{m}}{\sqrt{\hat{v}} + \epsilon} \]
+          <p><strong>AdamW</strong> applies weight decay directly to the weights rather than through the gradient, which regularizes more effectively. I used Adam for my RNNs and AdamW for T5.</p>
+        </div>
+        <p class="review">Review: <a href="../explanations/01-neural-network-basics.html">page 1, sections 6–9</a></p>
+      </article>
+
+      <article class="qa" id="m14">
+        <div class="qa-id">M14</div>
+        <h3 class="q">What are vanishing and exploding gradients, and how are they fixed?</h3>
+        <p class="tests"><span class="box-label">Tests</span>Why deep and recurrent networks were hard to train.</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+          <p>Backpropagation multiplies one derivative factor per layer, or per time step in an RNN. If those factors are consistently below 1, the gradient shrinks exponentially, and early layers or early words barely learn. For example, \(0.9^{100} \approx 3\times10^{-5}\). If they're above 1, the gradient grows exponentially and training diverges.</p>
+          <p>Fixes:</p>
+          <ul>
+            <li><strong>ReLU-family activations</strong>, whose derivative is 1 for positive inputs;</li>
+            <li><strong>careful initialization</strong> (Xavier/Glorot, or He for ReLU networks) so signal variance stays stable across layers;</li>
+            <li><strong>residual connections</strong>, which add an identity path;</li>
+            <li><strong>normalization layers</strong>;</li>
+            <li><strong>gated cells</strong> (LSTM, GRU) for RNNs;</li>
+            <li><strong>gradient clipping</strong> for exploding gradients. I clipped at norm 1.0 in my basic RNN.</li>
+          </ul>
+        </div>
+        <p class="review">Review: <a href="../explanations/02-sequence-models.html">page 2, sections 8–9</a></p>
+      </article>
+    </section>
+
+    <!-- ============ NLP ============ -->
+    <section class="qa-section">
+      <h2>NLP</h2>
+
+      <article class="qa" id="n1">
+        <div class="qa-id">N1</div>
+        <h3 class="q">Word-level vs. subword tokenization: why do modern models use subwords?</h3>
+        <p class="tests"><span class="box-label">Tests</span>The out-of-vocabulary problem, and how BPE works.</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+          <p>Word-level tokenization needs an entry for every word. That forces a trade-off: a huge vocabulary means huge embedding and output layers, while a capped vocabulary maps rare words, often names, to an unknown token. My RNN hit exactly this: with a 1% frequency cut, many title words became <code>&lt;UNK&gt;</code>.</p>
+          <p><strong>Subword tokenization</strong> keeps frequent words whole and splits rare words into known pieces, so nothing is out of vocabulary and the vocabulary stays around 30–50k. <strong>BPE</strong> (byte-pair encoding) starts from characters and repeatedly merges the most frequent adjacent pair into a new token. <strong>WordPiece</strong>, used by BERT, chooses merges by how much they improve the likelihood of the training data. <strong>SentencePiece</strong>, used by T5, works on raw text and treats spaces as a symbol, so it needs no language-specific pre-splitting. T5's vocabulary has about 32,000 pieces.</p>
+        </div>
+      </article>
+
+      <article class="qa" id="n2">
+        <div class="qa-id">N2</div>
+        <h3 class="q">What is TF-IDF, and is it still useful?</h3>
+        <p class="tests"><span class="box-label">Tests</span>Classical text representation and its place today.</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+          \[ \text{tf-idf}(t, d) = \text{tf}(t, d) \times \log\frac{N}{\text{df}(t)} \]
+          <p>A term's weight in a document rises with how often it appears there (tf) and falls with how many of the \(N\) documents contain it (df). "The" appears everywhere and gets weight near zero, while a distinctive term like "chargeback" gets a high weight. Libraries use smoothed variants of the idf term.</p>
+          <p>Yes, it's still useful. It's fast, interpretable, needs no training, and TF-IDF with logistic regression is a strong baseline for document classification. It also powers keyword search and retrieval. Its limits are that it ignores word order and meaning ("car" and "automobile" are unrelated to it) and gives large, sparse vectors. Embeddings address both.</p>
+        </div>
+      </article>
+
+      <article class="qa" id="n3">
+        <div class="qa-id">N3</div>
+        <h3 class="q">What are word embeddings? How do word2vec and GloVe differ, and what are contextual embeddings?</h3>
+        <p class="tests"><span class="box-label">Tests</span>Representations, from static to contextual.</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+          <p>An embedding maps each word to a dense vector of a few hundred numbers, learned so that words used in similar contexts get similar vectors, unlike sparse one-hot vectors where every word is equally unrelated. <strong>word2vec</strong> learns vectors by <em>prediction</em>: the skip-gram variant trains a vector to predict the words around it. <strong>GloVe</strong> learns by <em>counting</em>: it builds a global word co-occurrence matrix and fits vectors whose dot products approximate the log co-occurrence counts. I used 300-dimensional GloVe in my RNN.</p>
+          <p>Both are <strong>static</strong>: one vector per word regardless of context, so "bank" gets the same vector in "river bank" and "bank loan". <strong>Contextual embeddings</strong> from Transformers like BERT compute a different vector for each occurrence based on the whole sentence, which resolves such ambiguity. That's a major reason Transformer models outperform older approaches.</p>
+        </div>
+      </article>
+
+      <article class="qa" id="n4">
+        <div class="qa-id">N4</div>
+        <h3 class="q">Compare RNNs, LSTMs and GRUs.</h3>
+        <p class="tests"><span class="box-label">Tests</span>Recurrent architectures.</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+          <p>A <strong>vanilla RNN</strong> updates one hidden state as \(\mathbf{h}_t = \tanh(W\mathbf{x}_t + U\mathbf{h}_{t-1} + \mathbf{b})\). It's simple, but gradients vanish over long sequences.</p>
+          <p>An <strong>LSTM</strong> adds a separate cell state with an additive update, controlled by three gates: the forget gate decides what to erase, the input gate what to write, and the output gate what to expose. The additive path lets information and gradients persist across many steps.</p>
+          <p>A <strong>GRU</strong> simplifies this to two gates: the update gate blends old and new state, and the reset gate controls how much of the past feeds the new candidate. There's no separate cell state, so it has about 25% fewer parameters than an LSTM and trains faster, with similar accuracy on most tasks.</p>
+          <p>All three process tokens one at a time, so they can't be parallelized across a sequence. That's the main reason Transformers replaced them.</p>
+        </div>
+      </article>
+
+      <article class="qa" id="n5">
+        <div class="qa-id">N5</div>
+        <h3 class="q">Explain self-attention.</h3>
+        <p class="tests"><span class="box-label">Tests</span>The core Transformer mechanism, including the formula and the scaling.</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+          <p>Each token's vector is projected by three learned matrices into a <strong>query</strong> (what it's looking for), a <strong>key</strong> (what it offers for matching) and a <strong>value</strong> (the content it passes on). Each token compares its query with every key using a dot product, turns the scores into weights with a softmax, and outputs the weighted sum of the values:</p>
+          \[ \operatorname{Attention}(Q, K, V) = \operatorname{softmax}\!\left(\frac{QK^\top}{\sqrt{d_k}}\right)V \]
+          <p>Every token can draw directly on every other token in one step. Dividing by \(\sqrt{d_k}\) keeps the dot products at unit variance: without it their variance grows with \(d_k\), the softmax saturates into near one-hot weights, and gradients vanish. <strong>Multi-head attention</strong> runs several attention operations in parallel with different projections, so different heads can capture different relationships. In an encoder–decoder like T5, <strong>cross-attention</strong> uses queries from the decoder and keys and values from the encoder, which is how the decoder reads the input at every step.</p>
+        </div>
+        <p class="review">Review: <a href="../explanations/06-part-c1-transformer.html">Part C1, sections 2–6</a></p>
+      </article>
+
+      <article class="qa" id="n6">
+        <div class="qa-id">N6</div>
+        <h3 class="q">Why did Transformers replace RNNs? What are their downsides?</h3>
+        <p class="tests"><span class="box-label">Tests</span>A balanced comparison.</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+          <p><strong>Advantages:</strong></p>
+          <ul>
+            <li>They process all positions in parallel during training, so they use GPUs far better and can be trained on vastly more data.</li>
+            <li>Any two tokens are connected by one attention step instead of a long chain of recurrent steps, so long-range dependencies are easier to learn.</li>
+            <li>They scale predictably with more data and parameters, which is what made large-scale pretraining practical.</li>
+          </ul>
+          <p><strong>Downsides:</strong></p>
+          <ul>
+            <li>Attention's time and memory grow with the <em>square</em> of sequence length, which is why T5 caps inputs at 512 tokens.</li>
+            <li>They have no built-in sense of order and need positional information added.</li>
+            <li>They're data-hungry from scratch, so they're usually pretrained.</li>
+            <li>At generation time they still produce one token at a time.</li>
+          </ul>
+        </div>
+      </article>
+
+      <article class="qa" id="n7">
+        <div class="qa-id">N7</div>
+        <h3 class="q">BERT, GPT, T5: encoder-only, decoder-only, encoder–decoder. When do you use each?</h3>
+        <p class="tests"><span class="box-label">Tests</span>Matching architecture to task.</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+          <ul>
+            <li><strong>Encoder-only (BERT):</strong> bidirectional attention over the input, pretrained by predicting masked words. Best for <em>understanding</em> tasks: classification (such as complaint routing), named-entity recognition, and embeddings for search. It doesn't generate text on its own.</li>
+            <li><strong>Decoder-only (GPT family):</strong> each token attends only to earlier tokens, pretrained by predicting the next word. Best for open-ended <em>generation</em>, chat and few-shot prompting. Most modern LLMs are decoder-only and handle almost any task through prompting.</li>
+            <li><strong>Encoder–decoder (T5, BART):</strong> an encoder reads the full input bidirectionally, and a decoder generates output while cross-attending to it. A natural fit for <em>input-to-output</em> tasks like summarization, translation and title generation, which is why I used T5.</li>
+          </ul>
+        </div>
+      </article>
+
+      <article class="qa" id="n8">
+        <div class="qa-id">N8</div>
+        <h3 class="q">Compare greedy decoding, beam search, and sampling with temperature, top-k and top-p.</h3>
+        <p class="tests"><span class="box-label">Tests</span>How generation is controlled.</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+          <ul>
+            <li><strong>Greedy:</strong> take the most probable token each step. Fast and deterministic, but it can miss a better overall sequence and tends to repeat itself.</li>
+            <li><strong>Beam search:</strong> keep the top \(k\) partial sequences by total log-probability, usually with length normalization. Better for faithful, precise outputs like translation and summarization, at roughly \(k\) times the compute. I used \(k = 5\).</li>
+            <li><strong>Sampling:</strong> draw the next token at random from the distribution, which gives diverse, natural text for creative tasks.
+              <ul>
+                <li><strong>Temperature</strong> reshapes the distribution: \(p_i \propto \exp(o_i / T)\). \(T \lt 1\) sharpens it and \(T \gt 1\) flattens it.</li>
+                <li><strong>Top-k</strong> samples only from the \(k\) most likely tokens.</li>
+                <li><strong>Top-p (nucleus)</strong> samples from the smallest set of tokens whose probabilities add up to at least \(p\), so the candidate set adapts to how confident the model is.</li>
+              </ul>
+            </li>
+          </ul>
+        </div>
+      </article>
+
+      <article class="qa" id="n9">
+        <div class="qa-id">N9</div>
+        <h3 class="q">How do you evaluate generated text? Compare BLEU, ROUGE, BERTScore and perplexity.</h3>
+        <p class="tests"><span class="box-label">Tests</span>Metric literacy for NLP.</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+          <ul>
+            <li><strong>BLEU</strong> (machine translation) is precision-oriented. It takes the geometric mean of n-gram precisions for \(n\) = 1 to 4, times a <em>brevity penalty</em> so very short outputs can't game precision: \(\text{BLEU} = BP \cdot \exp\big(\sum_{n=1}^{4} \tfrac14 \log p_n\big)\), with \(BP = \min(1, e^{1 - r/c})\) for reference length \(r\) and candidate length \(c\).</li>
+            <li><strong>ROUGE</strong> (summarization) began as recall-oriented and is now usually reported as F1: n-gram overlap (ROUGE-1, ROUGE-2) and longest common subsequence (ROUGE-L). I used it throughout my project.</li>
+            <li><strong>BERTScore</strong> matches tokens by cosine similarity of their contextual embeddings, so paraphrases get credit where ROUGE and BLEU give none.</li>
+            <li><strong>Perplexity</strong>, \(\exp(\text{mean cross-entropy})\), measures how well a model predicts reference text. It's useful for comparing language models, but only when they share a tokenizer, and it says nothing about the quality of what a model generates.</li>
+          </ul>
+          <p>None of these checks factual accuracy, so important systems add factual-consistency checks and human evaluation.</p>
+        </div>
+      </article>
+
+      <article class="qa" id="n10">
+        <div class="qa-id">N10</div>
+        <h3 class="q">Fine-tuning, prompting, LoRA or RAG: how do you choose?</h3>
+        <p class="tests"><span class="box-label">Tests</span>Modern LLM adaptation strategies, and the trade-offs between them.</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+          <ul>
+            <li><strong>Prompting</strong> (zero- or few-shot): no training, fastest to try. Start here. It's limited by the context window and by how well the instructions steer the model.</li>
+            <li><strong>Full fine-tuning:</strong> update all weights on labeled data. Best when you have enough data and need consistent behaviour or a smaller, cheaper model. It's costly for large models, and you have to store a full copy per task.</li>
+            <li><strong>LoRA</strong> (parameter-efficient fine-tuning): freeze the pretrained weights and learn a low-rank update, \(\Delta W = BA\) with rank \(r\) much smaller than the layer size. For a 1,024 × 1,024 layer with \(r = 8\), that's 16,384 trainable parameters instead of 1,048,576 (about 1.6%). You get close to full fine-tuning quality with much less memory, and can keep small adapters per task.</li>
+            <li><strong>RAG</strong> (retrieval-augmented generation): fetch relevant documents at query time and put them in the prompt. It suits knowledge that changes or must be traceable, such as policy documents, since you update the document store instead of retraining. It also reduces hallucination by grounding answers in sources.</li>
+          </ul>
+          <p>A useful rule of thumb: fine-tuning or LoRA changes <em>how</em> the model behaves, and RAG changes <em>what information</em> it has. In my project, zero-shot Flan-T5-large matched a fine-tuned T5-small without any training.</p>
+        </div>
+      </article>
+
+      <article class="qa" id="n11">
+        <div class="qa-id">N11</div>
+        <h3 class="q">What is hallucination in summarization, and how would you reduce it?</h3>
+        <p class="tests"><span class="box-label">Tests</span>Reliability thinking. Critical in banking.</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+          <p>Hallucination is generated content that isn't supported by the source. It can <em>contradict</em> the source (a wrong date or name) or <em>add</em> plausible information that isn't there. It happens because models learn to produce fluent, likely text, not verified text.</p>
+          <p>Mitigations:</p>
+          <ul>
+            <li><strong>Constrain generation:</strong> use more extractive approaches, beam search or low temperature rather than high-temperature sampling, and prompts that say "use only the text provided".</li>
+            <li><strong>Ground it:</strong> use RAG, or fine-tune on data where summaries are strictly faithful.</li>
+            <li><strong>Verify:</strong> run automatic factual-consistency checks, such as entailment models or question-answering based checks, and flag or reject unsupported outputs.</li>
+            <li><strong>Keep humans in the loop</strong> wherever errors are costly.</li>
+          </ul>
+          <p>Titles are low risk, but summaries of customer complaints or financial documents need verification.</p>
+        </div>
+      </article>
+    </section>
+
+  </main>
+  <div class="pager">
+    <a href="01-project-deep-dive.html"><span class="lbl">Back</span>← 1 · Project deep-dive</a>
+    <a class="next" href="03-stats-sql-python.html"><span class="lbl">Next</span>3 · Stats, SQL and Python →</a>
+  </div>
+</div>
+</body>
+</html>

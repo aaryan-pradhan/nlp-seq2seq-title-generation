@@ -1,0 +1,638 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Stats, SQL and Python · Interview Prep</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;1,9..144,500&family=IBM+Plex+Sans:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.css">
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="qa.css">
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.js"></script>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/contrib/auto-render.min.js"></script>
+<script defer src="render.js"></script>
+</head>
+<body>
+<div class="offline-note">Formulas are typeset by KaTeX, which loads from the internet. Without a connection they show as raw LaTeX.</div>
+<div class="page">
+  <header class="masthead">
+    <div class="crumb"><a href="index.html">Interview prep</a><span class="sep">/</span><span class="here">3 · Stats, SQL and Python</span></div>
+    <span class="stage-tag">27 questions</span>
+    <h1 class="title">Stats, SQL and Python</h1>
+    <p class="dek">The screening-round questions for data science roles at card issuers and banks: probability and experiment design, SQL over transaction tables, and Python you're expected to write on the spot.</p>
+  </header>
+  <main>
+
+    <nav class="qindex" aria-label="Questions on this page">
+      <h2>Questions</h2>
+      <div class="group">Probability and statistics</div>
+      <ul>
+        <li><a href="#s1"><span class="qn">S1</span>Bayes: how many fraud alerts are real?</a></li>
+        <li><a href="#s2"><span class="qn">S2</span>What a p-value is, and isn't</a></li>
+        <li><a href="#s3"><span class="qn">S3</span>Type I, Type II errors and power</a></li>
+        <li><a href="#s4"><span class="qn">S4</span>Interpreting a confidence interval</a></li>
+        <li><a href="#s5"><span class="qn">S5</span>Central limit theorem</a></li>
+        <li><a href="#s6"><span class="qn">S6</span>Designing an A/B test</a></li>
+        <li><a href="#s7"><span class="qn">S7</span>t-test vs. chi-square vs. ANOVA</a></li>
+        <li><a href="#s8"><span class="qn">S8</span>Correlation, causation, Simpson's paradox</a></li>
+        <li><a href="#s9"><span class="qn">S9</span>Multicollinearity</a></li>
+        <li><a href="#s10"><span class="qn">S10</span>Two quick probability puzzles</a></li>
+        <li><a href="#s11"><span class="qn">S11</span>The bootstrap</a></li>
+      </ul>
+      <div class="group">SQL</div>
+      <ul>
+        <li><a href="#q12"><span class="qn">Q12</span>WHERE vs. HAVING, execution order</a></li>
+        <li><a href="#q13"><span class="qn">Q13</span>Joins and the LEFT JOIN trap</a></li>
+        <li><a href="#q14"><span class="qn">Q14</span>Second-highest amount</a></li>
+        <li><a href="#q15"><span class="qn">Q15</span>Top 3 customers per city</a></li>
+        <li><a href="#q16"><span class="qn">Q16</span>Month-over-month growth</a></li>
+        <li><a href="#q17"><span class="qn">Q17</span>Running totals</a></li>
+        <li><a href="#q18"><span class="qn">Q18</span>Finding duplicates</a></li>
+        <li><a href="#q19"><span class="qn">Q19</span>Three consecutive active days</a></li>
+      </ul>
+      <div class="group">Python</div>
+      <ul>
+        <li><a href="#p20"><span class="qn">P20</span>list, tuple, set, dict</a></li>
+        <li><a href="#p21"><span class="qn">P21</span>Two-sum in linear time</a></li>
+        <li><a href="#p22"><span class="qn">P22</span>Implement ROUGE-1</a></li>
+        <li><a href="#p23"><span class="qn">P23</span>pandas: flag unusual transactions</a></li>
+        <li><a href="#p24"><span class="qn">P24</span>Why vectorization is fast</a></li>
+        <li><a href="#p25"><span class="qn">P25</span>Generators and memory</a></li>
+        <li><a href="#p26"><span class="qn">P26</span>The mutable default argument bug</a></li>
+        <li><a href="#p27"><span class="qn">P27</span>Threads, processes and the GIL</a></li>
+      </ul>
+    </nav>
+
+    <!-- ============ STATS ============ -->
+    <section class="qa-section">
+      <h2>Probability and statistics</h2>
+
+      <article class="qa" id="s1">
+        <div class="qa-id">S1</div>
+        <h3 class="q">1% of transactions are fraudulent. A model flags 95% of fraud, and wrongly flags 5% of legitimate transactions. If a transaction is flagged, what's the probability it's actually fraud?</h3>
+        <p class="tests"><span class="box-label">Tests</span>Bayes' theorem and base-rate reasoning. Almost guaranteed at a card company.</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+          <p>Let \(F\) be "fraud" and \(A\) be "flagged". We know \(P(F) = 0.01\), \(P(A \mid F) = 0.95\) and \(P(A \mid \neg F) = 0.05\).</p>
+          \[ \begin{aligned}
+            P(F \mid A) &amp;= \frac{P(A \mid F)\,P(F)}{P(A \mid F)\,P(F) + P(A \mid \neg F)\,P(\neg F)} \\
+            &amp;= \frac{0.95 \times 0.01}{0.95 \times 0.01 + 0.05 \times 0.99} = \frac{0.0095}{0.0590} \approx 0.16
+          \end{aligned} \]
+          <p><strong>Only about 16% of flags are real fraud.</strong> Because legitimate transactions outnumber fraud 99 to 1, even a 5% false alarm rate produces five times as many false alarms as true catches.</p>
+          <p>The practical implications: judge the model on precision at the chosen threshold, not on its 95% catch rate alone; use a second-stage review or step-up authentication rather than blocking outright; and remember that the base rate drives everything.</p>
+        </div>
+        <div class="followup">
+          <span class="box-label">Quick sanity check</span>
+          <p>Picture 10,000 transactions: 100 are fraud, and 95 of those get flagged. Of the 9,900 legitimate ones, 495 get flagged. So 95 of the 590 flags are fraud, which is 16%.</p>
+        </div>
+      </article>
+
+      <article class="qa" id="s2">
+        <div class="qa-id">S2</div>
+        <h3 class="q">What is a p-value, and what is it <em>not</em>?</h3>
+        <p class="tests"><span class="box-label">Tests</span>The single most misunderstood statistic.</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+          <p>The p-value is the probability, <strong>assuming the null hypothesis is true</strong>, of seeing a result at least as extreme as the one observed:</p>
+          \[ p = P\big(T \ge t_{\text{observed}} \;\big|\; H_0\big) \]
+          <p>A small p-value means the data would be surprising if there were no effect. If it falls below a threshold \(\alpha\) that you set in advance, commonly 0.05, you reject \(H_0\).</p>
+          <p><strong>It is not:</strong></p>
+          <ul>
+            <li>the probability that \(H_0\) is true;</li>
+            <li>the probability that the result happened by chance;</li>
+            <li>a measure of how large or important the effect is. A tiny, useless effect can have \(p \lt 0.001\) with enough data.</li>
+          </ul>
+          <p>Also watch <strong>multiple comparisons</strong>: test 20 variants at \(\alpha = 0.05\) and you expect one false positive by chance. Correct for it, for example with Bonferroni, which uses \(\alpha / m\) for \(m\) tests. Picking the best of several prompts by their test scores has the same problem.</p>
+        </div>
+      </article>
+
+      <article class="qa" id="s3">
+        <div class="qa-id">S3</div>
+        <h3 class="q">Explain Type I and Type II errors and statistical power, using fraud detection.</h3>
+        <p class="tests"><span class="box-label">Tests</span>Linking hypothesis-testing language to business costs.</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+          <p>Take \(H_0\) as "this transaction is legitimate".</p>
+          <ul>
+            <li>A <strong>Type I error</strong> (false positive, rate \(\alpha\)) is flagging a legitimate transaction. The cost is a declined card, an annoyed customer and support calls.</li>
+            <li>A <strong>Type II error</strong> (false negative, rate \(\beta\)) is missing real fraud. The cost is direct financial loss.</li>
+            <li><strong>Power</strong> \(= 1 - \beta\) is the probability of catching fraud when it's there. In model terms, that's recall.</li>
+          </ul>
+          <p>For a fixed model you can't reduce both at once: lowering the flagging threshold catches more fraud (fewer Type II errors) but blocks more good customers (more Type I). The right threshold comes from comparing their costs. To reduce both, you need a better model or more information.</p>
+          <p>In experiment design, power depends on sample size, effect size and \(\alpha\). The convention is to aim for 80% power.</p>
+        </div>
+      </article>
+
+      <article class="qa" id="s4">
+        <div class="qa-id">S4</div>
+        <h3 class="q">What does a 95% confidence interval actually mean?</h3>
+        <p class="tests"><span class="box-label">Tests</span>A correct frequentist interpretation.</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+          <p>For a mean, the interval is</p>
+          \[ \bar{x} \pm 1.96\,\frac{s}{\sqrt{n}} \]
+          <p>where \(\bar{x}\) is the sample mean, \(s\) the sample standard deviation and \(n\) the sample size. The 95% describes the <strong>procedure</strong>: if you repeated the sampling many times and built an interval each time, about 95% of those intervals would contain the true mean.</p>
+          <p>It does <em>not</em> mean "there's a 95% probability the true value lies in this particular interval". The true value is fixed, and this interval either contains it or doesn't; that kind of probability statement needs a Bayesian credible interval.</p>
+          <p>Practically: a narrower interval means a more precise estimate, and it narrows with \(\sqrt{n}\), so halving its width takes four times the data. If a confidence interval for a <em>difference</em> excludes 0, the difference is significant at the matching level.</p>
+        </div>
+      </article>
+
+      <article class="qa" id="s5">
+        <div class="qa-id">S5</div>
+        <h3 class="q">What is the central limit theorem, and why does it matter?</h3>
+        <p class="tests"><span class="box-label">Tests</span>The foundation of most everyday inference.</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+          <p>Take \(n\) independent samples from any distribution with mean \(\mu\) and finite variance \(\sigma^2\). For large enough \(n\), their average is approximately normally distributed:</p>
+          \[ \bar{X}_n \;\approx\; \mathcal{N}\!\left(\mu,\ \frac{\sigma^2}{n}\right) \]
+          <p>This holds even if the underlying data is heavily skewed, like transaction amounts. It matters because it justifies z-tests, t-tests and confidence intervals for means and proportions without knowing the data's actual distribution. It also gives the standard error, \(\sigma/\sqrt{n}\).</p>
+          <p>Example from my project: each ROUGE score was the mean of 100 per-article scores, so its standard error is the per-article standard deviation divided by 10. That's why differences of 0.01 between models aren't meaningful. Caveats: independence matters, and very heavy tails or small \(n\) slow the convergence.</p>
+        </div>
+      </article>
+
+      <article class="qa" id="s6">
+        <div class="qa-id">S6</div>
+        <h3 class="q">How would you design an A/B test for a new card-offer email? How many customers do you need?</h3>
+        <p class="tests"><span class="box-label">Tests</span>End-to-end experiment design, including a sample-size calculation.</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+          <ol>
+            <li><strong>Define the metric and hypothesis in advance.</strong> For example, the primary metric is the offer acceptance rate within 14 days, with \(H_0\): no difference. Add guardrail metrics like unsubscribe rate.</li>
+            <li><strong>Choose the unit of randomization:</strong> the customer, not the email, so no one sees both versions. Randomly assign customers to control and treatment.</li>
+            <li><strong>Size the test</strong> for the smallest effect worth detecting (below).</li>
+            <li><strong>Run it for full weekly cycles,</strong> and don't stop early the moment it looks significant. Repeated peeking inflates false positives unless you use a sequential testing method.</li>
+            <li><strong>Check validity:</strong> confirm the groups really split as planned (a sample-ratio mismatch signals a bug) and that they're balanced on key covariates.</li>
+            <li><strong>Analyze</strong> with a two-proportion z-test and a confidence interval, and weigh statistical against practical significance.</li>
+          </ol>
+          <p><strong>Sample size per group</strong> for a baseline rate \(p\), a minimum detectable absolute lift \(\delta\), \(\alpha = 0.05\) (two-sided) and 80% power:</p>
+          \[ \begin{aligned}
+            n &amp;\approx \frac{(z_{1-\alpha/2} + z_{1-\beta})^2 \cdot 2p(1-p)}{\delta^2} \\
+            &amp;= \frac{(1.96 + 0.84)^2 \times 2 \times 0.05 \times 0.95}{0.01^2} = \frac{7.84 \times 0.095}{0.0001} \approx 7{,}450
+          \end{aligned} \]
+          <p>With a 5% baseline and a 1-percentage-point lift to detect, that's about 7,450 customers per group. Halving the detectable lift roughly quadruples the requirement.</p>
+        </div>
+      </article>
+
+      <article class="qa" id="s7">
+        <div class="qa-id">S7</div>
+        <h3 class="q">When do you use a t-test, a chi-square test, or ANOVA?</h3>
+        <p class="tests"><span class="box-label">Tests</span>Choosing the right test for the data type.</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+          <ul>
+            <li><strong>t-test:</strong> compare the <em>means</em> of a continuous variable between <strong>two</strong> groups, such as average spend for customers with and without a reward. Use a paired t-test for before/after on the same customers, and Welch's version when variances differ.</li>
+            <li><strong>ANOVA:</strong> compare means across <strong>three or more</strong> groups, such as spend across four card tiers. A significant result says <em>some</em> means differ; post-hoc tests (e.g. Tukey) say which.</li>
+            <li><strong>Chi-square test of independence:</strong> check whether two <em>categorical</em> variables are related, such as card tier versus whether a customer defaulted, using a contingency table of counts.</li>
+          </ul>
+          <p>If the data is heavily non-normal with small samples, non-parametric alternatives are Mann–Whitney U instead of the t-test and Kruskal–Wallis instead of ANOVA.</p>
+        </div>
+      </article>
+
+      <article class="qa" id="s8">
+        <div class="qa-id">S8</div>
+        <h3 class="q">Correlation isn't causation: give an example. What is Simpson's paradox?</h3>
+        <p class="tests"><span class="box-label">Tests</span>Confounding, and aggregation traps.</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+          <p>Premium card holders might have lower default rates. That doesn't mean giving someone a premium card makes them less likely to default: income and credit history drive both. That's a <strong>confounder</strong>. Establishing causation needs a randomized experiment, or careful causal methods such as matching or difference-in-differences, when experiments aren't possible.</p>
+          <p><strong>Simpson's paradox</strong> is when a trend inside every subgroup reverses once the groups are combined, because the groups differ in size and composition. A classic medical example (kidney stone treatments):</p>
+          <div class="tbl-wrap">
+          <table>
+            <thead><tr><th></th><th class="num">Small stones</th><th class="num">Large stones</th><th class="num">Overall</th></tr></thead>
+            <tbody>
+              <tr><td>Treatment A</td><td class="num">81/87 = 93%</td><td class="num">192/263 = 73%</td><td class="num">273/350 = 78%</td></tr>
+              <tr><td>Treatment B</td><td class="num">234/270 = 87%</td><td class="num">55/80 = 69%</td><td class="num">289/350 = 83%</td></tr>
+            </tbody>
+          </table>
+          </div>
+          <p>A is better for both stone sizes, yet B looks better overall, because A was mostly given to the harder large-stone cases. The lesson: check whether a confounding variable should be controlled before trusting an aggregate comparison.</p>
+        </div>
+      </article>
+
+      <article class="qa" id="s9">
+        <div class="qa-id">S9</div>
+        <h3 class="q">What is multicollinearity, and why does it matter?</h3>
+        <p class="tests"><span class="box-label">Tests</span>Regression diagnostics, common for credit-risk roles.</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+          <p>Multicollinearity is when predictors are strongly correlated with each other, such as credit limit, income and total spend. The model can't tell which one deserves the credit, so coefficient estimates become unstable. Their standard errors inflate, and signs can flip between samples, which ruins interpretation even though predictions may still be fine. It's measured with the <strong>variance inflation factor</strong>:</p>
+          \[ \mathrm{VIF}_j = \frac{1}{1 - R_j^2} \]
+          <p>Here \(R_j^2\) comes from regressing feature \(j\) on all the other features. A VIF above about 5–10 signals a problem. Fixes: drop or combine correlated features, use domain-based ratios (such as spend divided by limit), apply PCA, or use ridge regression, which stabilizes coefficients.</p>
+        </div>
+      </article>
+
+      <article class="qa" id="s10">
+        <div class="qa-id">S10</div>
+        <h3 class="q">Two quick ones: (a) Expected number of die rolls to get a six? (b) Each of 3 independent transactions is flagged with probability 10%. What's the probability at least one is flagged?</h3>
+        <p class="tests"><span class="box-label">Tests</span>Fluency with expectation and complements.</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+          <p><strong>(a) 6.</strong> Let \(E\) be the expected number of rolls. The first roll always counts, and with probability 5/6 it fails and you're back where you started:</p>
+          \[ E = 1 + \tfrac{5}{6}E \;\Rightarrow\; \tfrac{1}{6}E = 1 \;\Rightarrow\; E = 6 \]
+          <p>More generally, the expected wait for an event with probability \(p\) per trial is \(1/p\). This is the geometric distribution.</p>
+          <p><strong>(b) 27.1%.</strong> Use the complement: "at least one" = 1 − "none".</p>
+          \[ P(\text{at least one}) = 1 - (1 - 0.1)^3 = 1 - 0.729 = 0.271 \]
+        </div>
+      </article>
+
+      <article class="qa" id="s11">
+        <div class="qa-id">S11</div>
+        <h3 class="q">What is the bootstrap, and how would you use it to compare two models?</h3>
+        <p class="tests"><span class="box-label">Tests</span>Resampling-based inference, applied to your project.</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+          <p>The bootstrap estimates the uncertainty of a statistic by resampling your data <em>with replacement</em>. You treat the sample as a stand-in for the population, so no formula is needed.</p>
+          <p>Applied to my project, comparing fine-tuned T5-small (0.863 ROUGE-L) with zero-shot Flan-T5-large (0.875) on the same 100 articles:</p>
+          <ol>
+            <li>Save each model's score on every article, so each article has a pair of scores.</li>
+            <li>Draw 100 article indices with replacement. For those articles, compute the difference in mean score between the two models.</li>
+            <li>Repeat 10,000 times, giving 10,000 differences.</li>
+            <li>The 2.5th and 97.5th percentiles of those differences form a 95% confidence interval. If it includes 0, the models aren't distinguishable on this test set.</li>
+          </ol>
+          <p>Resampling <em>the same articles</em> for both models (a <strong>paired</strong> bootstrap) matters, because it removes the variation that comes from some articles simply being easier than others. I'd expect that interval to include 0, since the gap is about one article's worth.</p>
+        </div>
+      </article>
+    </section>
+
+    <!-- ============ SQL ============ -->
+    <section class="qa-section">
+      <h2>SQL</h2>
+      <div class="schema">
+        <span class="box-label">Schema used below (PostgreSQL syntax)</span>
+<pre class="code"><code>customers    (customer_id PK, city, signup_date)
+transactions (txn_id PK, customer_id FK, amount NUMERIC, txn_date DATE, merchant_category)</code></pre>
+      </div>
+
+      <article class="qa" id="q12">
+        <div class="qa-id">Q12</div>
+        <h3 class="q">What's the difference between WHERE and HAVING? In what order does SQL evaluate a query?</h3>
+        <p class="tests"><span class="box-label">Tests</span>The mental model behind most SQL bugs.</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+          <p><code>WHERE</code> filters <strong>rows before</strong> grouping, and <code>HAVING</code> filters <strong>groups after</strong> aggregation. So <code>WHERE SUM(amount) &gt; 10000</code> is invalid, and that condition belongs in <code>HAVING</code>. The logical evaluation order is:</p>
+          <p><code>FROM / JOIN → WHERE → GROUP BY → HAVING → SELECT (including window functions) → DISTINCT → ORDER BY → LIMIT</code></p>
+          <p>That order explains two common errors: you can't use a <code>SELECT</code> alias in <code>WHERE</code>, and you can't filter on a window function's result in <code>WHERE</code>. Wrap the query in a CTE or subquery and filter outside it.</p>
+<pre class="code"><code>SELECT customer_id, SUM(amount) AS total_spend
+FROM transactions
+WHERE txn_date &gt;= DATE '2025-01-01'   -- row filter
+GROUP BY customer_id
+HAVING SUM(amount) &gt; 10000            -- group filter
+ORDER BY total_spend DESC;</code></pre>
+        </div>
+      </article>
+
+      <article class="qa" id="q13">
+        <div class="qa-id">Q13</div>
+        <h3 class="q">Find customers with no transactions in the last 90 days, including customers who never transacted.</h3>
+        <p class="tests"><span class="box-label">Tests</span>Join types, and the classic LEFT JOIN filter trap.</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+<pre class="code"><code>SELECT c.customer_id
+FROM customers c
+LEFT JOIN transactions t
+       ON t.customer_id = c.customer_id
+      AND t.txn_date &gt;= CURRENT_DATE - INTERVAL '90 days'   -- filter goes in ON
+WHERE t.txn_id IS NULL;</code></pre>
+          <p>A <code>LEFT JOIN</code> keeps every customer, with NULLs where no transaction matched, so <code>t.txn_id IS NULL</code> means "no recent transaction". <strong>The trap:</strong> putting the date condition in <code>WHERE</code> instead of <code>ON</code> discards the NULL rows before that check can see them. The query then silently behaves like an inner join and returns nothing useful. An equivalent that's often clearer:</p>
+<pre class="code"><code>SELECT c.customer_id
+FROM customers c
+WHERE NOT EXISTS (
+  SELECT 1 FROM transactions t
+  WHERE t.customer_id = c.customer_id
+    AND t.txn_date &gt;= CURRENT_DATE - INTERVAL '90 days'
+);</code></pre>
+          <p>Join types in one line each: <code>INNER</code> returns matches only, <code>LEFT</code> returns all left rows, <code>RIGHT</code> all right rows, <code>FULL</code> all rows from both, and <code>CROSS</code> every combination. Also watch for <strong>fan-out</strong>: joining one customer to many transactions before aggregating duplicates the customer-level values.</p>
+        </div>
+      </article>
+
+      <article class="qa" id="q14">
+        <div class="qa-id">Q14</div>
+        <h3 class="q">Find the second-highest transaction amount.</h3>
+        <p class="tests"><span class="box-label">Tests</span>Subqueries or ranking, and edge cases like ties and no second value.</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+<pre class="code"><code>-- Option 1: subquery (returns NULL if there's no second distinct value)
+SELECT MAX(amount) AS second_highest
+FROM transactions
+WHERE amount &lt; (SELECT MAX(amount) FROM transactions);
+
+-- Option 2: ranking (generalizes to the Nth highest)
+SELECT DISTINCT amount
+FROM (
+  SELECT amount, DENSE_RANK() OVER (ORDER BY amount DESC) AS rnk
+  FROM transactions
+) ranked
+WHERE rnk = 2;</code></pre>
+          <p>Mention the edge cases: if the top amount appears twice, "second highest" should usually mean the next <em>distinct</em> value, which is why both options use distinct values rather than <code>OFFSET 1</code>. Option 1 returns NULL when only one distinct amount exists, and Option 2 returns no rows.</p>
+        </div>
+      </article>
+
+      <article class="qa" id="q15">
+        <div class="qa-id">Q15</div>
+        <h3 class="q">Find the top 3 customers by total spend in each city.</h3>
+        <p class="tests"><span class="box-label">Tests</span>Window functions with PARTITION BY, and how ties are handled.</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+<pre class="code"><code>WITH spend AS (
+  SELECT c.city, t.customer_id, SUM(t.amount) AS total_spend
+  FROM transactions t
+  JOIN customers c ON c.customer_id = t.customer_id
+  GROUP BY c.city, t.customer_id
+),
+ranked AS (
+  SELECT city, customer_id, total_spend,
+         DENSE_RANK() OVER (PARTITION BY city ORDER BY total_spend DESC) AS rnk
+  FROM spend
+)
+SELECT city, customer_id, total_spend
+FROM ranked
+WHERE rnk &lt;= 3
+ORDER BY city, rnk;</code></pre>
+          <p>Aggregate first, then rank within each city. Explain which ranking function you chose, using totals of 500, 500 and 300:</p>
+          <ul>
+            <li><code>ROW_NUMBER</code> gives 1, 2, 3: exactly three rows, with ties broken arbitrarily.</li>
+            <li><code>RANK</code> gives 1, 1, 3: ties share a rank and the next rank is skipped.</li>
+            <li><code>DENSE_RANK</code> gives 1, 1, 2: ties share a rank with no gaps.</li>
+          </ul>
+          <p>Ask the interviewer whether tied customers should all be included.</p>
+        </div>
+      </article>
+
+      <article class="qa" id="q16">
+        <div class="qa-id">Q16</div>
+        <h3 class="q">Calculate month-over-month percentage growth in total spend.</h3>
+        <p class="tests"><span class="box-label">Tests</span><code>LAG</code>, date truncation, and division edge cases.</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+<pre class="code"><code>WITH monthly AS (
+  SELECT DATE_TRUNC('month', txn_date) AS month,
+         SUM(amount) AS spend
+  FROM transactions
+  GROUP BY 1
+)
+SELECT month,
+       spend,
+       LAG(spend) OVER (ORDER BY month) AS prev_spend,
+       100.0 * (spend - LAG(spend) OVER (ORDER BY month))
+             / NULLIF(LAG(spend) OVER (ORDER BY month), 0) AS pct_growth
+FROM monthly
+ORDER BY month;</code></pre>
+          <p><code>LAG</code> fetches the previous row's value in the given order. <code>NULLIF(..., 0)</code> avoids dividing by zero, and <code>100.0</code> forces decimal rather than integer division. The first month has no previous value, so its growth is NULL. Mention that months with no transactions at all won't appear, so for a gap-free series you'd join to a generated calendar of months.</p>
+        </div>
+      </article>
+
+      <article class="qa" id="q17">
+        <div class="qa-id">Q17</div>
+        <h3 class="q">Compute each customer's running total of spend over time.</h3>
+        <p class="tests"><span class="box-label">Tests</span>Window frames.</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+<pre class="code"><code>SELECT customer_id, txn_date, amount,
+       SUM(amount) OVER (
+         PARTITION BY customer_id
+         ORDER BY txn_date, txn_id
+         ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+       ) AS running_total
+FROM transactions
+ORDER BY customer_id, txn_date, txn_id;</code></pre>
+          <p>The explicit <code>ROWS</code> frame matters. With only <code>ORDER BY txn_date</code>, the default frame treats all transactions on the same date as one peer group, so each of them would show the total including all of that day's transactions. Adding <code>txn_id</code> as a tie-breaker together with <code>ROWS</code> gives a true row-by-row running total.</p>
+        </div>
+      </article>
+
+      <article class="qa" id="q18">
+        <div class="qa-id">Q18</div>
+        <h3 class="q">Find duplicate transactions (same customer, amount and date), then delete the extras, keeping one.</h3>
+        <p class="tests"><span class="box-label">Tests</span>GROUP BY with HAVING, and ROW_NUMBER for de-duplication.</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+<pre class="code"><code>-- Find them
+SELECT customer_id, amount, txn_date, COUNT(*) AS copies
+FROM transactions
+GROUP BY customer_id, amount, txn_date
+HAVING COUNT(*) &gt; 1;
+
+-- Delete extras, keeping the lowest txn_id in each group
+WITH ranked AS (
+  SELECT txn_id,
+         ROW_NUMBER() OVER (
+           PARTITION BY customer_id, amount, txn_date
+           ORDER BY txn_id
+         ) AS rn
+  FROM transactions
+)
+DELETE FROM transactions
+WHERE txn_id IN (SELECT txn_id FROM ranked WHERE rn &gt; 1);</code></pre>
+          <p>Before deleting, say you'd confirm these are truly duplicates. Two identical coffees on the same day are legitimate, so a real key would include a timestamp or merchant. And run the <code>SELECT</code> first, ideally inside a transaction.</p>
+        </div>
+      </article>
+
+      <article class="qa" id="q19">
+        <div class="qa-id">Q19</div>
+        <h3 class="q">Find customers who made transactions on at least 3 consecutive days.</h3>
+        <p class="tests"><span class="box-label">Tests</span>The "gaps and islands" pattern, a common harder question.</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+<pre class="code"><code>WITH days AS (
+  SELECT DISTINCT customer_id, txn_date AS d
+  FROM transactions
+),
+islands AS (
+  SELECT customer_id, d,
+         d - CAST(ROW_NUMBER() OVER (PARTITION BY customer_id ORDER BY d) AS INT) AS island
+  FROM days
+)
+SELECT DISTINCT customer_id
+FROM islands
+GROUP BY customer_id, island
+HAVING COUNT(*) &gt;= 3;</code></pre>
+          <p><strong>The trick:</strong> number each customer's distinct active days in order. For consecutive dates, the date and the row number both go up by 1 each step, so <em>date minus row number</em> stays constant. A gap in dates changes that constant. Each constant value marks one run of consecutive days, and counting the rows per run finds runs of 3 or more:</p>
+          <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>Date</th><th class="num">Row number</th><th>Date − row number</th></tr></thead>
+            <tbody>
+              <tr><td>Mar 1</td><td class="num">1</td><td>Feb 28</td></tr>
+              <tr><td>Mar 2</td><td class="num">2</td><td>Feb 28</td></tr>
+              <tr><td>Mar 3</td><td class="num">3</td><td>Feb 28 → run of 3</td></tr>
+              <tr><td>Mar 5</td><td class="num">4</td><td>Mar 1 → new run</td></tr>
+            </tbody>
+          </table>
+          </div>
+          <p>The first CTE takes distinct dates so that several transactions on one day count as one day. (The example dates assume a non-leap year.)</p>
+        </div>
+      </article>
+    </section>
+
+    <!-- ============ PYTHON ============ -->
+    <section class="qa-section">
+      <h2>Python</h2>
+
+      <article class="qa" id="p20">
+        <div class="qa-id">P20</div>
+        <h3 class="q">When would you use a list, tuple, set or dict? What are the lookup costs?</h3>
+        <p class="tests"><span class="box-label">Tests</span>Choosing data structures by complexity.</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+          <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>Type</th><th>Properties</th><th>Membership test</th><th>Use it for</th></tr></thead>
+            <tbody>
+              <tr><td><code>list</code></td><td>ordered, mutable, duplicates allowed</td><td>O(n)</td><td>sequences you append to or index by position (append is O(1) amortized; inserting at the front is O(n))</td></tr>
+              <tr><td><code>tuple</code></td><td>ordered, immutable, hashable if its items are</td><td>O(n)</td><td>fixed records, and dictionary keys like <code>(customer_id, date)</code></td></tr>
+              <tr><td><code>set</code></td><td>unordered, unique items</td><td>O(1) average</td><td>de-duplication, fast "have I seen this?" checks</td></tr>
+              <tr><td><code>dict</code></td><td>key → value, insertion-ordered</td><td>O(1) average</td><td>lookups, counting, grouping</td></tr>
+            </tbody>
+          </table>
+          </div>
+          <p>The classic performance bug is checking <code>if x in some_list</code> inside a loop. That's O(n²) overall, and converting the list to a set first makes it O(n). Sets and dicts are hash tables, so their items must be hashable (immutable).</p>
+        </div>
+      </article>
+
+      <article class="qa" id="p21">
+        <div class="qa-id">P21</div>
+        <h3 class="q">Given a list of numbers and a target, return the indices of two numbers that add up to the target, in O(n).</h3>
+        <p class="tests"><span class="box-label">Tests</span>Using a hash map to trade memory for time.</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+<pre class="code"><code>def two_sum(nums, target):
+    seen = {}                      # value -&gt; index
+    for i, x in enumerate(nums):
+        need = target - x
+        if need in seen:           # O(1) average lookup
+            return seen[need], i
+        seen[x] = i
+    return None
+
+two_sum([2, 7, 11, 15], 9)         # (0, 1)</code></pre>
+          <p>The brute force checks every pair in O(n²). Storing values already seen in a dict means each number only needs one lookup for its complement, giving O(n) time and O(n) memory. Checking before inserting prevents pairing a number with itself. If the input is already sorted, two pointers moving inward from both ends find the pair in O(n) time with O(1) extra space.</p>
+        </div>
+      </article>
+
+      <article class="qa" id="p22">
+        <div class="qa-id">P22</div>
+        <h3 class="q">Implement ROUGE-1 F1 between a generated title and a reference.</h3>
+        <p class="tests"><span class="box-label">Tests</span>Coding a metric you used, correctly and with edge cases.</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+<pre class="code"><code>from collections import Counter
+
+def rouge1_f1(generated: str, reference: str) -&gt; float:
+    gen = generated.lower().split()
+    ref = reference.lower().split()
+    if not gen or not ref:
+        return 0.0
+    overlap = sum((Counter(gen) &amp; Counter(ref)).values())   # clipped matches
+    if overlap == 0:
+        return 0.0
+    precision = overlap / len(gen)
+    recall = overlap / len(ref)
+    return 2 * precision * recall / (precision + recall)
+
+rouge1_f1("barrier reef coral reef", "great barrier reef")   # 0.571...</code></pre>
+          <p>The key detail is <code>Counter &amp; Counter</code>, which keeps the <em>minimum</em> count of each word. That implements ROUGE's clipping: "reef" appears twice in the generated title but once in the reference, so it matches only once. The early returns handle empty strings and no overlap, avoiding division by zero. The real <code>rouge_score</code> library also strips punctuation and can apply stemming.</p>
+        </div>
+        <p class="review">Review: <a href="../explanations/04-part-b1-basic-rnn.html">Part B1, section 5, worked example 1</a></p>
+      </article>
+
+      <article class="qa" id="p23">
+        <div class="qa-id">P23</div>
+        <h3 class="q">In pandas, flag transactions that are more than 3× a customer's usual spend.</h3>
+        <p class="tests"><span class="box-label">Tests</span><code>groupby().transform</code>, and thinking about how the baseline is defined.</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+<pre class="code"><code>import pandas as pd
+
+g = df.groupby("customer_id")["amount"]
+total = g.transform("sum")
+count = g.transform("count")
+
+# mean of the customer's OTHER transactions (leave-one-out)
+df["baseline"] = (total - df["amount"]) / (count - 1)
+df["is_unusual"] = df["amount"] &gt; 3 * df["baseline"]</code></pre>
+          <p><code>transform</code> returns a value aligned to every original row, unlike <code>agg</code>, which returns one row per group. Two design points are worth saying out loud:</p>
+          <ul>
+            <li><strong>Leave-one-out.</strong> A plain per-customer mean includes the transaction being judged, so a huge purchase inflates its own baseline and hides itself.</li>
+            <li><strong>Customers with a single transaction</strong> get 0/0 = NaN, and NaN comparisons are False, so they're never flagged. Decide whether that's acceptable.</li>
+          </ul>
+          <p>In production I'd use the median (robust to outliers) over a trailing time window of <em>past</em> transactions only, to avoid the leakage in M4.</p>
+        </div>
+      </article>
+
+      <article class="qa" id="p24">
+        <div class="qa-id">P24</div>
+        <h3 class="q">Why is vectorized NumPy or pandas code so much faster than a Python loop?</h3>
+        <p class="tests"><span class="box-label">Tests</span>Understanding performance, not just knowing it's true.</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+<pre class="code"><code>import numpy as np
+x = np.random.rand(1_000_000)
+
+slow = sum(v * 2 for v in x)   # a million interpreter steps
+fast = (x * 2).sum()           # two calls; the loops run in compiled C</code></pre>
+          <p>A Python loop pays interpreter overhead for every element: dispatching each operation, checking types, and creating a new Python number object for every intermediate result. A vectorized operation makes one call into compiled C code that loops over a contiguous block of raw numbers of a single known type. That avoids all the per-element overhead, uses the CPU cache efficiently, and can use SIMD instructions that process several numbers at once. The speed-up is typically 10–100×. In pandas, <code>.apply</code> with a Python function is essentially a loop, so prefer built-in column operations.</p>
+        </div>
+      </article>
+
+      <article class="qa" id="p25">
+        <div class="qa-id">P25</div>
+        <h3 class="q">What is a generator, and when would you use one?</h3>
+        <p class="tests"><span class="box-label">Tests</span>Memory-efficient data processing.</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+<pre class="code"><code>def read_articles(path):
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            yield line.strip()      # produces one item, then pauses
+
+for article in read_articles("articles.txt"):
+    process(article)                # only one line is in memory at a time</code></pre>
+          <p>A function containing <code>yield</code> returns a generator: an iterator that computes each value on demand and pauses between values instead of building a full list. Memory stays constant however large the input is, which is ideal for streaming large files, database cursors or data pipelines. The trade-off is that a generator can only be iterated once and doesn't support indexing. spaCy's <code>nlp.pipe</code>, which I used for preprocessing, is built this way: it takes an iterable and yields processed documents one batch at a time.</p>
+        </div>
+      </article>
+
+      <article class="qa" id="p26">
+        <div class="qa-id">P26</div>
+        <h3 class="q">What's wrong with this function?</h3>
+<pre class="code"><code>def add_tag(tag, tags=[]):
+    tags.append(tag)
+    return tags</code></pre>
+        <p class="tests"><span class="box-label">Tests</span>A classic Python gotcha.</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+          <p>Default argument values are evaluated <strong>once</strong>, when the function is defined, not on each call. Every call that omits <code>tags</code> shares the same list, so it keeps growing:</p>
+<pre class="code"><code>add_tag("a")    # ['a']
+add_tag("b")    # ['a', 'b']   &lt;- surprise</code></pre>
+          <p>The fix is to use <code>None</code> as the default and create a fresh list inside:</p>
+<pre class="code"><code>def add_tag(tag, tags=None):
+    if tags is None:
+        tags = []
+    tags.append(tag)
+    return tags</code></pre>
+          <p>The same applies to any mutable default, such as dicts and sets.</p>
+        </div>
+      </article>
+
+      <article class="qa" id="p27">
+        <div class="qa-id">P27</div>
+        <h3 class="q">Threads or processes for speeding up Python work? What's the GIL?</h3>
+        <p class="tests"><span class="box-label">Tests</span>Concurrency basics, which matter for data engineering roles.</p>
+        <div class="answer">
+          <span class="box-label">Answer</span>
+          <p>In standard CPython, the <strong>Global Interpreter Lock</strong> allows only one thread to execute Python bytecode at a time. So:</p>
+          <ul>
+            <li><strong>I/O-bound work</strong> (API calls, database queries, downloads): use <strong>threads</strong> or <code>asyncio</code>. Threads release the GIL while waiting, so they overlap usefully.</li>
+            <li><strong>CPU-bound pure-Python work</strong> (parsing, feature computation in loops): use <strong>processes</strong> via <code>multiprocessing</code> or <code>concurrent.futures.ProcessPoolExecutor</code>. Each process has its own interpreter and GIL. The cost is start-up time and copying data between processes.</li>
+            <li><strong>NumPy, pandas and PyTorch</strong> release the GIL inside their compiled code, so threads can parallelize those operations.</li>
+          </ul>
+          <p>spaCy's <code>n_process</code> option uses multiple processes for exactly this reason. Python 3.13 also introduced an experimental build without the GIL, but the rules above still describe the standard interpreter.</p>
+        </div>
+      </article>
+    </section>
+
+  </main>
+  <div class="pager">
+    <a href="02-ml-nlp-fundamentals.html"><span class="lbl">Back</span>← 2 · ML and NLP fundamentals</a>
+    <a class="next" href="index.html"><span class="lbl">Done</span>Back to contents →</a>
+  </div>
+</div>
+</body>
+</html>

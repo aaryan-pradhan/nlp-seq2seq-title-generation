@@ -1,0 +1,338 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Part B2: Four Upgrades · From Article to Headline</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;1,9..144,500&family=IBM+Plex+Sans:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.css">
+<link rel="stylesheet" href="style.css">
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.js"></script>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/contrib/auto-render.min.js"></script>
+<script defer src="render.js"></script>
+</head>
+<body>
+<div class="offline-note">Formulas are typeset by KaTeX, which loads from the internet. Without a connection they show as raw LaTeX.</div>
+<div class="page">
+  <header class="masthead">
+    <div class="crumb"><a href="index.html">Explanations</a><span class="sep">/</span><span class="here">Part B2 · Four upgrades</span></div>
+    <span class="stage-tag">Part B2</span>
+    <h1 class="title">Four upgrades to the RNN</h1>
+    <p class="dek">Pretrained embeddings, a hierarchical encoder, a two-GRU decoder and beam search, each added on top of the one before. For every upgrade, this page covers what the spec asks for, what the notebook actually does, and what the numbers can and can't tell us.</p>
+  </header>
+  <main>
+
+    <div class="recap"><span class="box-label">Uses</span>the B1 model, its training step, ROUGE, and the four causes of its low score from <a href="04-part-b1-basic-rnn.html">Part B1</a> · softmax shift-invariance, perplexity and greedy decoding from <a href="02-sequence-models.html">page 2</a> · underfitting from <a href="01-neural-network-basics.html">page 1, section 10</a> · the loss of sentence boundaries from <a href="03-part-a-preprocessing.html">Part A</a>.</div>
+
+    <section>
+      <h2>How the four runs were set up</h2>
+      <p>The notebook trains four separate models from scratch. Each run switches on one more constructor flag of <code>Seq2SeqRNN</code> than the last:</p>
+      <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Run</th><th>GloVe</th><th>Hierarchical encoder</th><th>Two-GRU decoder</th><th>Beam search</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td>on</td><td>—</td><td>—</td><td>—</td></tr>
+          <tr><td>2</td><td>on</td><td>on</td><td>—</td><td>—</td></tr>
+          <tr><td>3</td><td>on</td><td>on</td><td>on</td><td>—</td></tr>
+          <tr><td>4</td><td>on</td><td>on</td><td>on</td><td>on</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p>Everything else matches B1 (hidden size 300, Adam at 0.001, batch size 8, 3 epochs, fp16) with three differences. All four runs train on all 13,879 articles, so the 1% threshold becomes 139 articles and \(V = 9{,}229\). They don't use gradient clipping. And they share a rewritten evaluation function.</p>
+      <div class="callout impl">
+        <span class="box-label">In the notebook · the B2 evaluation differs from B1's</span>
+        <p>Before scoring, the B2 <code>evaluate</code> cuts each generated sequence down to the length of the longest reference title in its batch of 8:</p>
+        <p><code>if target_seq.size(1) &lt; generated_indices.size(1): generated_indices = generated_indices[:, :target_seq.size(1)]</code></p>
+        <p>This directly removes B1's cause 1, the cap from always writing ~10 words. Suppose a reference of \(r\) words sits in a batch whose longest reference has \(r_{\max}\) words, and all \(r\) words appear among the kept ones. Then:</p>
+        \[ P = \frac{r}{r_{\max}},\quad R = 1 \;\Rightarrow\; F = \frac{2r}{r + r_{\max}} \qquad \text{e.g. } r = r_{\max} = 3:\ F = 1.0 \;\text{ (B1's cap was 0.46)} \]
+        <p>The cut uses the reference titles' lengths, which a real title generator wouldn't know. So it improves the <em>score</em> without improving the <em>model</em>. The B2 word-level metric also changed, to scikit-learn's micro-F1 over tokens compared position by position (effectively the fraction of positions where the generated token equals the reference token). It isn't comparable to B1's set-based F1. <strong>Rows within B2 are measured the same way. B1 against B2 is not.</strong></p>
+      </div>
+    </section>
+
+    <section>
+      <h2>Upgrade 1 · GloVe pretrained embeddings</h2>
+      <div class="spec-quote">
+        <span class="box-label">assignment_spec.pdf · B2</span>
+        <blockquote>"GloVe (Global Vectors for Word Representation) embeddings are designed to capture the semantic meaning and relationships between words by analyzing the co-occurrence statistics of words in a large text corpus. Download and use the Wikipedia 6B vectors […] 4. Import the described GloVe embeddings into the RNN model using a setter function load_embeddings in the EncoderRNN class."</blockquote>
+      </div>
+      <p>This targets B1's cause 2, word meanings that start from random numbers. The fix is to start them from vectors someone else already learned on billions of words.</p>
+      <h3>What GloVe learns</h3>
+      <p>Take a huge corpus and count, for every pair of words, how often word \(j\) appears within a small window of words around word \(i\). That count is \(X_{ij}\). GloVe learns a vector \(\mathbf{w}_i\) for each word (plus a second "context" vector \(\tilde{\mathbf{w}}_j\) and scalar biases) so that their dot product predicts the <em>logarithm</em> of the count:</p>
+      <div class="eq">
+        \[ J = \sum_{i,j=1}^{V} f(X_{ij})\,\Big(\mathbf{w}_i^\top \tilde{\mathbf{w}}_j + b_i + \tilde{b}_j - \log X_{ij}\Big)^2, \qquad f(x) = \begin{cases} (x / 100)^{3/4} &amp; x \lt 100 \\ 1 &amp; \text{otherwise} \end{cases} \]
+        <p class="note">Read the bracket as prediction minus target, squared (page 1, section 5): the dot product plus biases should equal \(\log X_{ij}\). The log is used because counts range from 1 to millions, and it turns ratios of counts into differences of dot products. The weight \(f\) gives pairs seen only once or twice little influence, since those counts are noise, and caps the influence of extremely frequent pairs at 1. Pairs that never co-occur (\(X_{ij} = 0\)) get \(f = 0\) and are skipped. Minimizing \(J\) by gradient descent places words with similar co-occurrence patterns at similar vectors. That's the "semantic meaning" the spec refers to.</p>
+      </div>
+      <p><code>glove.6B.300d</code> was trained on 6 billion tokens of Wikipedia (2014) and Gigaword 5 newswire. It has a 400,000-word lowercase vocabulary with 300 numbers per word, which matches this project's hidden size exactly. Because Part A lowercases and lemmatizes, most of the project's vocabulary words exist in it as written.</p>
+      <h3>How the notebook loads it</h3>
+      <div class="eq">
+        \[ E_{\text{enc}}[i] = \begin{cases} \text{GloVe}(w_i) &amp; \text{if } w_i \text{ is in GloVe's vocabulary} \\ \text{a random vector with entries} \sim \mathcal{N}(0,\ 0.6^2) &amp; \text{otherwise} \end{cases} \]
+        <p class="note">\(\mathcal{N}(0, 0.6^2)\) is a normal distribution with mean 0 and standard deviation 0.6. Afterwards the encoder embedding is <strong>frozen</strong> (<code>requires_grad = False</code>): its \(9{,}229 \times 300 = 2{,}768{,}700\) numbers are never updated, and words missing from GloVe keep their random vectors permanently. Only the <em>encoder's</em> table is replaced. The decoder's embedding is still randomly initialized and trained as in B1.</p>
+      </div>
+      <div class="callout fix">
+        <span class="box-label">docs/report.pdf · bug hit and fixed</span>
+        <p>Some project vocabulary words aren't in the GloVe file, which raised <code>KeyError</code>s when building the matrix. The fix gives those words a fallback random vector (the second case above), and the report adds logging of GloVe coverage to confirm the initialization is meaningful.</p>
+      </div>
+      <h3>Effect</h3>
+      <div class="tbl-wrap">
+      <table>
+        <caption>Training loss per epoch · B1 vs. run 1</caption>
+        <thead><tr><th>Epoch</th><th class="num">B1 (random embeddings)</th><th class="num">Run 1 (GloVe, frozen)</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td class="num">4.182</td><td class="num">3.964</td></tr>
+          <tr><td>2</td><td class="num">2.412</td><td class="num">2.283</td></tr>
+          <tr><td>3</td><td class="num">1.550</td><td class="num">1.300</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <div class="callout result">
+        <span class="box-label">Run 1 · 100 test articles</span>
+        <p><strong>ROUGE-1 0.4985 · ROUGE-2 0.2630 · ROUGE-L 0.4985</strong> · micro-F1 0.5556 · training 1,013 s · evaluation 1.08 s</p>
+      </div>
+      <p><strong>What this supports.</strong> Training loss is lower at every epoch, and final perplexity drops from \(e^{1.55} \approx 4.7\) to \(e^{1.30} \approx 3.7\): the GloVe model fits the training titles better. Two smaller differences muddy even this comparison (run 1 has 500 more training articles, and B1 clipped gradients). <strong>What it doesn't support.</strong> The doubling of ROUGE from 0.25 to 0.50 can't be credited to GloVe alone, because the evaluation changed at the same time (see the note at the top of this page). Part of that jump is the output being cut to the reference length.</p>
+    </section>
+
+    <section>
+      <h2>Upgrade 2 · the hierarchical encoder</h2>
+      <div class="spec-quote">
+        <span class="box-label">assignment_spec.pdf · B2</span>
+        <blockquote>"HierEncoderRNN is a hierarchical encoder which processes the input at two levels - word and sentence level. The first word-level GRU processes the input token embeddings as earlier, and the output states are averaged for tokens in each sentence. These averaged embeddings for each sentence are encoded by a second sent-level GRU, which also utilizes the final hidden states from the word-level GRU. The final hidden state from this sent-level GRU is returned, to be fed into the decoder. You can split sentences by punctuation (e.g. period, question mark, exclamation) or using a sentence tokenizer."</blockquote>
+      </div>
+      <h3>The design the spec describes</h3>
+      <p>This targets B1's cause 4. Asking one GRU to carry a whole long article in its state is hard, so the idea is to summarize each sentence first and then summarize the much shorter sequence of sentence summaries. Split the article into \(M\) sentences, where sentence \(m\) is the set of token positions \(S_m\):</p>
+      <div class="eq">
+        \[ \begin{aligned}
+          \mathbf{h}_i &amp;= [\overrightarrow{\mathbf{h}}_i ; \overleftarrow{\mathbf{h}}_i] \in \mathbb{R}^{600} &amp;&amp; \text{word-level bidirectional GRU, as in B1} \\
+          \mathbf{a}_m &amp;= \frac{1}{|S_m|} \sum_{i \in S_m} \mathbf{h}_i &amp;&amp; \text{one average per sentence} \\
+          \mathbf{c} &amp;= \text{final state of } \mathrm{GRU}_{\text{sent}}(\mathbf{a}_1, \ldots, \mathbf{a}_M), \text{ started from the word-level final states} &amp;&amp; M \text{ steps}
+        \end{aligned} \]
+        <p class="note">The sentence-level GRU runs for \(M\) steps (tens) instead of \(L\) (hundreds). By page 2, section 8, that's a far shorter path for gradients.</p>
+      </div>
+      <h3>What the notebook computes</h3>
+      <div class="eq">
+        \[ \bar{\mathbf{a}} = \frac{1}{L}\sum_{i=1}^{L} \mathbf{h}_i, \qquad \mathbf{c} = \big[\,\mathrm{GRU}_{\text{sent},\rightarrow}(\bar{\mathbf{a}}, \mathbf{0})\ ;\ \mathrm{GRU}_{\text{sent},\leftarrow}(\bar{\mathbf{a}}, \mathbf{0})\,\big] \in \mathbb{R}^{600} \]
+        <p class="note">The code's <code>word_output.mean(dim=1)</code> averages over dimension 1, which is <em>every position in the padded sequence</em>, not over each sentence. The result is a single vector \(\bar{\mathbf{a}}\) per article. The sentence-level GRU (bidirectional, 600 → 300 per direction) therefore runs over a sequence of length <strong>one</strong>, starting from zeros, and the word-level GRU's final states are never used.</p>
+      </div>
+      <div class="figure">
+        <svg viewBox="0 0 680 232" width="680" height="232" role="img" aria-label="Left: word states averaged per sentence into three vectors for a three-step sentence GRU. Right: all word states including padding averaged into one vector for a one-step sentence GRU.">
+          <defs><marker id="ah5" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 z" fill="var(--ink-soft)"/></marker></defs>
+          <line x1="340" y1="8" x2="340" y2="226" stroke="var(--rule)"/>
+          <g font-family="IBM Plex Mono, monospace" font-size="11">
+            <text x="20" y="18" fill="var(--spec)">SPEC · average per sentence</text>
+            <text x="360" y="18" fill="var(--impl)">NOTEBOOK · one average of everything</text>
+          </g>
+          <g stroke="var(--rule)" stroke-width="1">
+            <line x1="31" y1="180" x2="59" y2="144"/><line x1="59" y1="180" x2="59" y2="144"/><line x1="87" y1="180" x2="59" y2="144"/>
+            <line x1="131" y1="180" x2="159" y2="144"/><line x1="159" y1="180" x2="159" y2="144"/><line x1="187" y1="180" x2="159" y2="144"/>
+            <line x1="231" y1="180" x2="259" y2="144"/><line x1="259" y1="180" x2="259" y2="144"/><line x1="287" y1="180" x2="259" y2="144"/>
+            <line x1="381" y1="180" x2="505" y2="144"/><line x1="412" y1="180" x2="505" y2="144"/><line x1="443" y1="180" x2="505" y2="144"/><line x1="474" y1="180" x2="505" y2="144"/><line x1="505" y1="180" x2="505" y2="144"/><line x1="536" y1="180" x2="505" y2="144"/><line x1="567" y1="180" x2="505" y2="144"/><line x1="598" y1="180" x2="505" y2="144"/><line x1="629" y1="180" x2="505" y2="144"/>
+          </g>
+          <g fill="var(--accent-soft)" stroke="var(--accent)">
+            <rect x="20" y="180" width="22" height="22" rx="3"/><rect x="48" y="180" width="22" height="22" rx="3"/><rect x="76" y="180" width="22" height="22" rx="3"/>
+            <rect x="120" y="180" width="22" height="22" rx="3"/><rect x="148" y="180" width="22" height="22" rx="3"/><rect x="176" y="180" width="22" height="22" rx="3"/>
+            <rect x="220" y="180" width="22" height="22" rx="3"/><rect x="248" y="180" width="22" height="22" rx="3"/><rect x="276" y="180" width="22" height="22" rx="3"/>
+            <rect x="370" y="180" width="22" height="22" rx="3"/><rect x="401" y="180" width="22" height="22" rx="3"/><rect x="432" y="180" width="22" height="22" rx="3"/><rect x="463" y="180" width="22" height="22" rx="3"/><rect x="494" y="180" width="22" height="22" rx="3"/><rect x="525" y="180" width="22" height="22" rx="3"/><rect x="556" y="180" width="22" height="22" rx="3"/>
+          </g>
+          <g fill="var(--paper-raised)" stroke="var(--ink-soft)" stroke-dasharray="3,2">
+            <rect x="587" y="180" width="22" height="22" rx="3"/><rect x="618" y="180" width="22" height="22" rx="3"/>
+          </g>
+          <g fill="var(--spec-soft)" stroke="var(--spec)">
+            <rect x="31" y="118" width="56" height="26" rx="4"/><rect x="131" y="118" width="56" height="26" rx="4"/><rect x="231" y="118" width="56" height="26" rx="4"/>
+          </g>
+          <rect x="449" y="118" width="112" height="26" rx="4" fill="var(--impl-soft)" stroke="var(--impl)"/>
+          <g font-family="IBM Plex Mono, monospace" font-size="11" text-anchor="middle">
+            <text x="59" y="135" fill="var(--spec)">avg₁</text><text x="159" y="135" fill="var(--spec)">avg₂</text><text x="259" y="135" fill="var(--spec)">avg₃</text>
+            <text x="505" y="135" fill="var(--impl)">avg of all</text>
+          </g>
+          <g stroke="var(--ink-soft)" stroke-width="1.3" marker-end="url(#ah5)">
+            <line x1="59" y1="118" x2="59" y2="88"/><line x1="159" y1="118" x2="159" y2="88"/><line x1="259" y1="118" x2="259" y2="88"/>
+            <line x1="505" y1="118" x2="505" y2="88"/>
+          </g>
+          <rect x="20" y="50" width="280" height="34" rx="5" fill="var(--paper-raised)" stroke="var(--spec)"/>
+          <rect x="380" y="50" width="250" height="34" rx="5" fill="var(--paper-raised)" stroke="var(--impl)"/>
+          <g font-family="IBM Plex Mono, monospace" font-size="11" text-anchor="middle">
+            <text x="160" y="71" fill="var(--ink)">sentence GRU · 3 steps</text>
+            <text x="505" y="71" fill="var(--ink)">sentence GRU · 1 step</text>
+          </g>
+          <g font-family="IBM Plex Sans, sans-serif" font-size="10.5" fill="var(--ink-soft)" text-anchor="middle">
+            <text x="160" y="222">word-GRU states, grouped by sentence</text>
+            <text x="505" y="222">every position, padding (dashed) included</text>
+          </g>
+        </svg>
+        <figcaption>Same component names, very different information flow.</figcaption>
+      </div>
+      <p><strong>Why the notebook couldn't split sentences.</strong> Part A removed all punctuation, periods included, before this model ever sees the text. No sentence boundaries are left to split on.</p>
+      <p><strong>What the single average loses.</strong></p>
+      <ul>
+        <li><strong>Position.</strong> An average doesn't record where in the article each state came from. The opening sentence, which on Wikipedia usually names the subject, carries no more weight than any other stretch of text.</li>
+        <li><strong>Signal, to padding.</strong> Articles in a batch are padded to the longest one, and the average includes the padded positions. A 200-word article batched with an 800-word one is averaged over 800 positions, so three-quarters of its summary vector comes from states computed on padding.</li>
+        <li><strong>Any use for the second GRU.</strong> Over a one-item sequence the sentence GRU has nothing sequential to model. It's just one more gated transformation of \(\bar{\mathbf{a}}\).</li>
+      </ul>
+      <div class="callout fix">
+        <span class="box-label">docs/report.pdf · bug hit and fixed</span>
+        <p>Switching between the flat and hierarchical encoders caused tensor shape mismatches. Sentence-level padding and reshaping had to keep the batch dimension consistent across both GRU layers. A single shared reshaping block and <code>batch_first</code> on every GRU resolved it.</p>
+      </div>
+      <h3>Effect</h3>
+      <div class="callout result">
+        <span class="box-label">Run 2 · 100 test articles</span>
+        <p><strong>ROUGE-1 0.3254 · ROUGE-2 0.1093 · ROUGE-L 0.3254</strong> · micro-F1 0.2222 · final training loss 3.123 (perplexity 22.7) · training 1,025 s</p>
+      </div>
+      <p>This comparison with run 1 is a fair one, since the evaluation is the same. The decisive number is the <strong>training</strong> loss: 3.12 against run 1's 1.30, or a perplexity of 22.7 against 3.7. The model can't even fit the titles it's trained on, which is underfitting (page 1, section 10), not overfitting. That's what you'd expect when the only thing handed to the decoder is one padding-diluted average of the whole article.</p>
+    </section>
+
+    <section>
+      <h2>Upgrade 3 · the two-GRU decoder</h2>
+      <div class="spec-quote">
+        <span class="box-label">assignment_spec.pdf · B2</span>
+        <blockquote>"Decoder2RNN is a decoder with 2 GRUs, with the second one processing the outputs given by the first one, and having the same initial hidden states from the encoder. The output logits from this second GRU is then processed as earlier."</blockquote>
+      </div>
+      <h3>The design the spec describes</h3>
+      <p>Stack two GRUs, each with its own state, both starting from the encoder's summary:</p>
+      <div class="eq">
+        \[ \begin{aligned}
+          \mathbf{s}^{(1)}_t &amp;= \mathrm{GRU}_1\big(\mathbf{u}_t,\ \mathbf{s}^{(1)}_{t-1}\big) &amp;&amp; \text{first GRU reads the previous token} \\
+          \mathbf{s}^{(2)}_t &amp;= \mathrm{GRU}_2\big(\mathbf{s}^{(1)}_t,\ \mathbf{s}^{(2)}_{t-1}\big) &amp;&amp; \text{second GRU reads the first's output} \\
+          \mathbf{o}_t &amp;= W_o\,\mathbf{s}^{(2)}_t + \mathbf{b}_o, \qquad \mathbf{s}^{(1)}_0 = \mathbf{s}^{(2)}_0 = \mathbf{s}_0
+        \end{aligned} \]
+        <p class="note">Two separate memories: the second GRU can track something different from the first across the whole title.</p>
+      </div>
+      <h3>What the notebook computes</h3>
+      <div class="eq">
+        \[ \mathbf{s}'_t = \mathrm{GRU}_1(\mathbf{u}_t,\ \mathbf{s}_{t-1}), \qquad \mathbf{s}_t = \mathrm{GRU}_2(\mathbf{s}'_t,\ \mathbf{s}'_t), \qquad \mathbf{o}_t = W_o\,\mathbf{s}_t + \mathbf{b}_o \]
+        <p class="note">The code passes the first GRU's <em>new hidden state</em> into the second GRU as its starting state, and returns only the second GRU's state to carry into the next step. So there's a single state \(\mathbf{s}_t\) threaded through both GRUs in turn. And for a one-layer GRU run for one step, the output equals the new hidden state, so the second GRU receives the same vector as both its input and its previous state. The effect is a deeper computation at each step, not a second memory.</p>
+      </div>
+      <p>This run also keeps the hierarchical encoder from run 2, so the decoder starts from the same collapsed summary. However good the decoder is, it can't recover information the encoder has already lost.</p>
+      <div class="callout fix">
+        <span class="box-label">docs/report.pdf · bug hit and fixed</span>
+        <p>Training initially crashed because the decoder's input dimensions weren't re-aligned between the two GRUs. Matching the tensor shapes and hidden-state sizes fixed it.</p>
+      </div>
+      <h3>Effect</h3>
+      <div class="callout result">
+        <span class="box-label">Run 3 · 100 test articles</span>
+        <p><strong>ROUGE-1 0.3049 · ROUGE-2 0.0820 · ROUGE-L 0.3016</strong> · final training loss 3.067 (perplexity 21.5) · training 1,076 s</p>
+      </div>
+      <p>Compared with run 2, training loss is marginally lower (3.07 vs 3.12) and test ROUGE marginally lower (0.305 vs 0.325). Both gaps are small, and each run was trained only once. Run 4 below shows how much a single retraining can move things: it retrains the <em>same</em> encoder and decoder and ends at a loss of 3.16. No conclusion about the two-GRU decoder's effect can be drawn from these differences.</p>
+    </section>
+
+    <section>
+      <h2>Upgrade 4 · beam search</h2>
+      <div class="spec-quote">
+        <span class="box-label">assignment_spec.pdf · B2</span>
+        <blockquote>"Beam Search algorithm can be used during inference to find an optimal sequence of output tokens instead of greedily selecting the best token at each time step. The algorithm expands all possible next steps or tokens creating a tree of possible sequences. The top k sequences with highest scores are retained after each iteration. The best one is returned after the stopping criterion is reached for all the beams."</blockquote>
+      </div>
+      <h3>Why greedy decoding can pick a worse title</h3>
+      <p>By the chain rule (page 2, section 4), a title's probability is the <em>product</em> of its step probabilities. Greedy decoding (page 2, section 13) maximizes one factor at a time, which doesn't guarantee the largest product:</p>
+      <div class="worked">
+        <span class="box-label">Worked example</span>
+        <p>Step 1: \(P(\text{great}) = 0.5\), \(P(\text{coral}) = 0.4\), \(P(\text{reef}) = 0.1\). Step 2 after "great": \(P(\text{barrier}) = 0.35\), \(P(\text{reef}) = 0.25\). Step 2 after "coral": \(P(\text{reef}) = 0.9\), \(P(\text{island}) = 0.05\).</p>
+        \[ \text{greedy: } \text{great} \to \text{barrier}: \; 0.5 \times 0.35 = 0.175 \qquad\quad \text{best: } \text{coral} \to \text{reef}: \; 0.4 \times 0.9 = 0.36 \]
+        <p>Greedy commits to "great" because 0.5 beats 0.4, and never finds out that "coral" leads to a title twice as probable.</p>
+      </div>
+      <h3>The algorithm</h3>
+      <p>Beam search keeps the \(k\) best partial titles (the <em class="term">beams</em>) instead of one. Each is scored by its total log-probability. Summing logs gives the same ranking as multiplying probabilities, without the product of many small numbers underflowing towards zero:</p>
+      <div class="eq">
+        \[ \operatorname{score}(y_1, \ldots, y_t) = \sum_{s=1}^{t} \log p_s(y_s) = \log \prod_{s=1}^{t} p_s(y_s) \]
+      </div>
+      <ol>
+        <li>Start with one beam, \(\langle\mathrm{SOS}\rangle\), with score 0.</li>
+        <li>For every beam that hasn't ended, run one decoder step and compute its extensions' scores (old score + \(\log p\) of the new token).</li>
+        <li>Pool all extensions from all beams, keep the \(k\) highest-scoring, and discard the rest.</li>
+        <li>Repeat until every kept beam has produced \(\langle\mathrm{EOS}\rangle\) or the length cap is reached, then return the highest-scoring beam.</li>
+      </ol>
+      <div class="figure">
+        <svg viewBox="0 0 680 256" width="680" height="256" role="img" aria-label="Beam search tree with k equals 2 over two steps, showing coral reef winning with score minus 1.02">
+          <g stroke="var(--rule)" stroke-width="1.4">
+            <line x1="94" y1="130" x2="196" y2="65"/><line x1="94" y1="130" x2="196" y2="130"/><line x1="94" y1="130" x2="196" y2="195"/>
+            <line x1="324" y1="65" x2="470" y2="29"/><line x1="324" y1="65" x2="470" y2="79"/>
+            <line x1="324" y1="130" x2="470" y2="141"/><line x1="324" y1="130" x2="470" y2="201"/>
+          </g>
+          <g font-family="IBM Plex Mono, monospace" font-size="10.5" fill="var(--ink-soft)">
+            <text x="150" y="90">0.5</text><text x="150" y="125">0.4</text><text x="150" y="182">0.1</text>
+            <text x="392" y="40">0.35</text><text x="392" y="92">0.25</text><text x="392" y="128">0.9</text><text x="404" y="160">0.05</text>
+          </g>
+          <rect x="10" y="113" width="84" height="34" rx="5" fill="var(--paper-raised)" stroke="var(--ink-soft)"/>
+          <rect x="196" y="48" width="128" height="34" rx="5" fill="var(--accent-soft)" stroke="var(--accent)"/>
+          <rect x="196" y="113" width="128" height="34" rx="5" fill="var(--accent-soft)" stroke="var(--accent)"/>
+          <rect x="196" y="178" width="128" height="34" rx="5" fill="var(--paper-raised)" stroke="var(--ink-soft)" stroke-dasharray="4,3"/>
+          <rect x="470" y="12" width="196" height="34" rx="5" fill="var(--accent-soft)" stroke="var(--accent)"/>
+          <rect x="470" y="62" width="196" height="34" rx="5" fill="var(--paper-raised)" stroke="var(--ink-soft)" stroke-dasharray="4,3"/>
+          <rect x="470" y="124" width="196" height="34" rx="5" fill="var(--good-soft)" stroke="var(--good)" stroke-width="2"/>
+          <rect x="470" y="184" width="196" height="34" rx="5" fill="var(--paper-raised)" stroke="var(--ink-soft)" stroke-dasharray="4,3"/>
+          <g font-family="IBM Plex Mono, monospace" font-size="12" text-anchor="middle">
+            <text x="52" y="134" fill="var(--ink)">&lt;SOS&gt;</text>
+            <text x="260" y="69" fill="var(--accent)">great  −0.69</text>
+            <text x="260" y="134" fill="var(--accent)">coral  −0.92</text>
+            <text x="260" y="199" fill="var(--ink-soft)">reef  −2.30</text>
+            <text x="568" y="33" fill="var(--accent)">great barrier  −1.74</text>
+            <text x="568" y="83" fill="var(--ink-soft)">great reef  −2.08</text>
+            <text x="568" y="145" fill="var(--good)">coral reef  −1.02</text>
+            <text x="568" y="205" fill="var(--ink-soft)">coral island  −3.91</text>
+          </g>
+          <g font-family="IBM Plex Mono, monospace" font-size="10.5" fill="var(--ink-soft)" text-anchor="middle">
+            <text x="52" y="246">start</text><text x="260" y="246">step 1 · keep 2</text><text x="568" y="246">step 2 · keep 2</text>
+          </g>
+        </svg>
+        <figcaption>k = 2. Scores are cumulative log-probabilities, and dashed boxes are pruned. "coral reef" (−1.02, probability 0.36) beats greedy's "great barrier" (−1.74, probability 0.175).</figcaption>
+      </div>
+      <p><strong>Length normalization.</strong> Each added word adds a \(\log p \le 0\), so unmodified beam search prefers shorter outputs. A common fix divides by length:</p>
+      <div class="eq">
+        \[ \operatorname{score}_{\text{norm}} = \frac{1}{t^{\alpha}}\sum_{s=1}^{t} \log p_s(y_s) \]
+        <p class="note">\(\alpha = 0\) is no normalization and \(\alpha = 1\) is the per-token average. This project's RNN beam search doesn't normalize. The HuggingFace <code>generate</code> function used in Parts C1 and C2 does, with \(\alpha = 1\) by default.</p>
+      </div>
+      <div class="callout impl">
+        <span class="box-label">In the notebook · how this beam search differs from the algorithm above</span>
+        <ul>
+          <li><strong>It sums raw logits, not log-probabilities.</strong> <code>torch.topk(decoder_output, k)</code> ranks the decoder's raw scores \(\mathbf{o}\), and those are what get added to each beam's score. By page 2, section 5, \(\log p_w = o_w - \log\sum_j \exp(o_j)\). Among the extensions of <em>one</em> beam the subtracted term is identical, so they're ranked correctly. But <em>different</em> beams have different subtracted terms. If one beam's logits all happen to be 5 higher than another's, its extensions look 5 points better even when their probabilities are identical. The comparison across beams, which is the whole point of beam search, is distorted.</li>
+          <li><strong>The stopping rule never fires.</strong> It waits for the top beams to end in <code>&lt;EOS&gt;</code>, which this model never learned to produce (B1, cause 1), so every article runs the full 10 steps.</li>
+          <li><strong>The returned sequence starts with <code>&lt;SOS&gt;</code>.</strong> When the evaluation cuts it to the reference length, that slot counts, so one fewer real word survives the cut.</li>
+          <li><strong>It's a fresh training run.</strong> Beam search only changes decoding, but run 4 retrains the whole model, so its scores mix beam search with a different set of trained weights.</li>
+        </ul>
+      </div>
+      <div class="callout fix">
+        <span class="box-label">docs/report.pdf · bug hit and fixed</span>
+        <p>Beam search outputs came back in inconsistent shapes (1-D in some configurations, 2-D or 3-D in others), even with beam width 1, which should behave like greedy decoding. Explicit dimension checks with fallback reshaping now standardize every decoding path to a batch × length tensor before scoring. These are the <code>outputs.dim()</code> branches in the B2 <code>evaluate</code>.</p>
+      </div>
+      <h3>Effect</h3>
+      <div class="callout result">
+        <span class="box-label">Run 4 · 100 test articles · beam width 5</span>
+        <p><strong>ROUGE-1 0.3262 · ROUGE-2 0.0710 · ROUGE-L 0.3262</strong> · final training loss 3.162 · training 1,074 s · <strong>evaluation 6.85 s</strong></p>
+      </div>
+      <p>Compared with run 3, ROUGE-1/L are slightly higher and ROUGE-2 slightly lower. Because the model was retrained and the scoring uses raw logits, beam search's own effect can't be isolated. The one clean measurement is <strong>cost</strong>: evaluating the 100 test articles went from 1.19 s to 6.85 s, about \(6.85 / 1.19 \approx 5.8\times\) slower. Each article is expanded into 5 beams, each advanced one step at a time in a Python loop.</p>
+    </section>
+
+    <section>
+      <h2>Part B at a glance</h2>
+      <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Model</th><th class="num">R-1</th><th class="num">R-2</th><th class="num">R-L</th><th class="num">Final train loss</th><th class="num">Perplexity</th><th class="num">Train (s)</th><th class="num">Eval (s)</th></tr></thead>
+        <tbody>
+          <tr><td>B1 · basic <em>(B1 evaluation)</em></td><td class="num">0.250</td><td class="num">0.098</td><td class="num">0.247</td><td class="num">1.550</td><td class="num">4.7</td><td class="num">938</td><td class="num">—</td></tr>
+          <tr class="hi"><td>Run 1 · + GloVe</td><td class="num">0.499</td><td class="num">0.263</td><td class="num">0.499</td><td class="num">1.300</td><td class="num">3.7</td><td class="num">1,013</td><td class="num">1.08</td></tr>
+          <tr><td>Run 2 · + hierarchical</td><td class="num">0.325</td><td class="num">0.109</td><td class="num">0.325</td><td class="num">3.123</td><td class="num">22.7</td><td class="num">1,025</td><td class="num">1.11</td></tr>
+          <tr><td>Run 3 · + two-GRU decoder</td><td class="num">0.305</td><td class="num">0.082</td><td class="num">0.302</td><td class="num">3.067</td><td class="num">21.5</td><td class="num">1,076</td><td class="num">1.19</td></tr>
+          <tr><td>Run 4 · + beam search</td><td class="num">0.326</td><td class="num">0.071</td><td class="num">0.326</td><td class="num">3.162</td><td class="num">23.6</td><td class="num">1,074</td><td class="num">6.85</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <h3>What Part B does show</h3>
+      <ul>
+        <li>Among runs measured the same way, GloVe alone (run 1) is best by a wide margin, on both test ROUGE and training loss.</li>
+        <li>The hierarchical encoder <em>as implemented</em> collapses each article into one padding-diluted average. That leaves the model unable to fit its own training data (perplexity 3.7 → 22.7), and every run built on it inherits the problem.</li>
+        <li>Beam search made evaluation about 5.8× slower.</li>
+      </ul>
+      <h3>What Part B can't show</h3>
+      <ul>
+        <li>How much of the 0.25 → 0.50 jump is GloVe, because B1 and B2 use different evaluation functions.</li>
+        <li>Whether the two-GRU decoder or beam search helps. Their differences are small, from single runs, and beam search's row is also a retrained model.</li>
+        <li>How each upgrade does <em>on its own</em>. The spec's report section asks for "the RNN with each of the 4 individual improvements and with all the improvements", but these runs are cumulative, so each change is measured on top of the previous ones.</li>
+      </ul>
+    </section>
+
+    <div class="recap"><span class="box-label">Carried forward</span>GloVe's objective, and the fact that pretrained word knowledge was the clearest win · the hierarchical encoder's information loss, visible as underfitting · beam search, log-probability scoring and length normalization, all reused by HuggingFace's <code>generate</code> in Part C · the rule that comparisons are only valid when training and evaluation match.</div>
+  </main>
+  <div class="pager">
+    <a href="04-part-b1-basic-rnn.html"><span class="lbl">Back</span>← Part B1 · Basic RNN</a>
+    <a class="next" href="06-part-c1-transformer.html"><span class="lbl">Next</span>Part C1 · Attention and T5 →</a>
+  </div>
+</div>
+</body>
+</html>
