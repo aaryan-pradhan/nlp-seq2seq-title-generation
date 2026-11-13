@@ -1,0 +1,196 @@
+\chapter{Bullet 2: fine-tuning T5-small}
+\label{ch:t5}
+
+\begin{cvline}
+Fine-tuned T5-small with Hugging Face Seq2SeqTrainer on 13.4k Wikipedia pairs, reaching 0.86 ROUGE-L outperforming all RNN models
+\end{cvline}
+
+%=====================================================================
+\section{Words you need}
+
+\subsection*{How T5 reads text}
+
+\begin{definition}[Subword tokens]
+T5 doesn't use a word list. It splits text into \dfn{subword tokens} with SentencePiece: common words stay whole, rare ones break into pieces, for example ``hastings'' $\to$ ``hast'' + ``ings''. So no word is ever unknown, and names can be written piece by piece. T5 reads the raw text, not the cleaned version.
+\end{definition}
+
+\begin{definition}[Query, key, value]
+Inside a Transformer every token's vector is turned into three vectors by three learned matrices: a \dfn{query} $q$ (``what am I looking for?''), a \dfn{key} $k$ (``what do I contain?'') and a \dfn{value} $v$ (``what do I pass on?'').
+\end{definition}
+
+\begin{definition}[Self-attention]
+In \dfn{self-attention}, each token compares its query with every token's key, turns the scores into weights with a softmax, and takes the weighted average of the values:
+\[
+\text{output}_i = \sum_j \alpha_{ij}\, v_j, \qquad \alpha_{ij} = \frac{e^{s_{ij}}}{\sum_m e^{s_{im}}}, \qquad s_{ij} = \frac{q_i \cdot k_j}{\sqrt{d}} ,
+\]
+where $d$ is the length of the vectors. The weights $\alpha_{ij}$ are positive and add up to 1 over $j$. Dividing by $\sqrt{d}$ keeps the scores from growing with $d$. In matrix form this is $\operatorname{softmax}(QK^{\mathsf{T}}/\sqrt{d})\,V$.
+\end{definition}
+
+\begin{example}[Toy: one token attends over two]
+$d = 2$. Token 1 has query $q_1 = (1, 0)$. The keys are $k_1 = (1, 0)$ and $k_2 = (0, 1)$; the values are $v_1 = (2, 0)$ and $v_2 = (0, 2)$.
+\begin{steps}
+  \item Scores: $s_{11} = 1/\sqrt2 = 0.707$, $s_{12} = 0$.
+  \item Softmax: $\alpha_{11} = e^{0.707}/(e^{0.707} + e^0) = 2.028/3.028 = 0.670$, and $\alpha_{12} = 0.330$.
+  \item Output: $0.670\,(2, 0) + 0.330\,(0, 2) = (1.34, 0.66)$, mostly token 1's value, some of token 2's.
+\end{steps}
+\end{example}
+
+\begin{definition}[Cross-attention]
+In the decoder, \dfn{cross-attention} uses the decoder's queries against the encoder's keys and values. So at every step of writing the title, the decoder can look straight at \emph{every} input token and weigh the relevant ones, instead of one fixed vector.
+\end{definition}
+
+\begin{definition}[Text-to-text pretraining]
+T5 was pretrained on a huge web corpus by \dfn{span corruption}: hide short stretches of text and train the model to write them back. Every task, translation or summary alike, is then posed as ``text in, text out''. T5-small has about 60 million weights.
+\end{definition}
+
+\subsection*{How it was fine-tuned}
+
+\begin{definition}[A small learning rate]
+For fine-tuning the learning rate is tiny, here $2 \times 10^{-5}$ with batches of 8, against $10^{-3}$ for the GRUs. The pretrained knowledge is then adjusted, not wiped out. This is the main difference between fine-tuning settings and training from scratch.
+\end{definition}
+
+\begin{definition}[Truncation]
+\dfn{Truncation}: cutting inputs that are too long. Articles were cut to 512 tokens and titles to 64. A Wikipedia article names its subject at the start, so little is lost.
+\end{definition}
+
+\begin{definition}[Seq2SeqTrainer]
+\dfn{Seq2SeqTrainer} is Hugging Face's ready-made training loop for encoder--decoder models: batching, the loss, the optimizer, evaluation and generation with beam search. Here: 3 epochs, batch 8, learning rate $2\times10^{-5}$, beam width 5 at generation.
+\end{definition}
+
+\begin{definition}[Label masking]
+The training loss should skip padding in the target titles. In Hugging Face the convention is to set padded target positions to $-100$, which the loss ignores: \dfn{label masking}. Your code left them as the pad token, so padding counted in the loss. The fix is \code{DataCollatorForSeq2Seq}, which masks them.
+\end{definition}
+
+\begin{sayit}[Say it in 20 seconds]
+I fine-tuned T5-small, a pretrained Transformer, on the same 13.4k Wikipedia pairs using Hugging Face's Seq2SeqTrainer: 3 epochs, learning rate $2\times10^{-5}$, articles cut to 512 tokens, beam search of width 5 to generate. It reached 0.86 ROUGE-L, against 0.50 for the best RNN. Two reasons: it arrives pretrained on huge amounts of text, and its decoder attends to every input token instead of one fixed vector.
+\end{sayit}
+
+%=====================================================================
+\section{The picture}
+
+\begin{sayit}[Board L · Bottleneck against attention]
+\begin{pic}
+\begin{tikzpicture}[>={Latex[length=2mm]},font=\sffamily\small,
+  box/.style={draw=#1L,fill=#1,rounded corners=2pt,align=center,minimum height=7mm,inner sep=3pt,minimum width=9mm}]
+\node[font=\sffamily\small\bfseries] at (1.6,1.3) {GRU: one vector};
+\foreach \i in {0,...,3} \node[box=bdq] (a\i) at (\i*1.1,0) {};
+\node[box=bdr] (v) at (1.65,-1.3) {vector};
+\foreach \i in {0,...,3} \draw[->] (a\i) -- (v);
+\node[box=bdv] (d) at (1.65,-2.5) {decoder};
+\draw[->] (v) -- (d);
+\node[font=\sffamily\small\bfseries] at (8.6,1.3) {T5: attention to every token};
+\foreach \i in {0,...,3} \node[box=bdq] (b\i) at (7+\i*1.1,0) {};
+\node[box=bdv] (e) at (8.65,-2.5) {decoder};
+\foreach \i/\w in {0/0.6,1/1.6,2/0.4,3/0.4} \draw[->,line width=\w mm,thmc!70] (b\i) -- (e);
+\end{tikzpicture}
+\end{pic}
+Say: ``The GRU decoder sees the article through one vector. T5's decoder looks back at every input token at every step, with weights it learns: thicker arrows mean more attention.''
+\end{sayit}
+
+\begin{sayit}[Board M · Self-attention, by hand (toy)]
+\begin{pic}
+\begin{tikzpicture}[>={Latex[length=2mm]},font=\sffamily\small,
+  box/.style={draw=#1L,fill=#1,rounded corners=2pt,align=center,minimum height=8mm,inner sep=3pt}]
+\node[box=bda] (q) at (0,0) {$q_1 = (1,0)$};
+\node[box=bdq] (k1) at (3.2,0.8) {$k_1$: score 0.707};
+\node[box=bdq] (k2) at (3.2,-0.8) {$k_2$: score 0};
+\node[box=bdy] (s) at (6.6,0) {softmax\\0.670 / 0.330};
+\node[box=bdg] (o) at (10,0) {$0.670\,v_1 + 0.330\,v_2$\\$= (1.34, 0.66)$};
+\draw[->] (q) -- (k1); \draw[->] (q) -- (k2); \draw[->] (k1) -- (s); \draw[->] (k2) -- (s); \draw[->] (s) -- (o);
+\end{tikzpicture}
+\end{pic}
+Say: ``Dot the query with each key, scale by $\sqrt d$, softmax into weights that add to 1, and average the values. That's all attention is.''
+\end{sayit}
+
+\begin{sayit}[Board N · Subwords: no word is unknown]
+\begin{pic}
+\begin{tikzpicture}[font=\sffamily\small]
+\node[anchor=west] at (0,0.6) {GRU vocabulary:};
+\foreach \w/\c [count=\i from 0] in {battle/thmc,of/prec,\code{<UNK>}/trapc} {\node[draw=\c,fill=\c!15,rounded corners=1pt] at (3.6+\i*1.6,0.6) {\w};}
+\node[anchor=west] at (0,-0.4) {T5 subwords:};
+\foreach \w [count=\i from 0] in {\_battle,\_of,\_hast,ings} {\node[draw=thmc,fill=thmc!15,rounded corners=1pt] at (3.4+\i*1.4,-0.4) {\w};}
+\end{tikzpicture}
+\end{pic}
+Say: ``The GRU can't write `hastings' if it's not in its word list. T5 builds it from pieces, so names come through.'' (The exact split is illustrative.)
+\end{sayit}
+
+\begin{sayit}[Board O · Text in, text out]
+\begin{pic}
+\begin{tikzpicture}[>={Latex[length=2mm]},font=\sffamily\small,
+  box/.style={draw=#1L,fill=#1,rounded corners=2pt,align=center,minimum height=9mm,inner sep=3pt}]
+\node[box=bdq,text width=40mm] (in) at (0,0) {article text\\(cut to 512 tokens)};
+\node[box=bda] (enc) at (3.8,0) {T5 encoder\\self-attention};
+\node[box=bdv] (dec) at (7,0) {T5 decoder\\cross-attention};
+\node[box=bdg] (out) at (10.2,0) {title\\(beam 5)};
+\draw[->] (in) -- (enc); \draw[->] (enc) -- (dec); \draw[->] (dec) -- (out);
+\node[font=\sffamily\scriptsize,text=prec] at (5.4,-1.2) {Seq2SeqTrainer: 3 epochs, batch 8, lr $2\times10^{-5}$};
+\end{tikzpicture}
+\end{pic}
+Say: ``Same encoder--decoder idea as the GRU, but both halves are Transformers, pretrained, and connected by attention instead of a single vector.''
+\end{sayit}
+
+\begin{sayit}[Board P · The gap (ROUGE-L)]
+\begin{pic}
+\begin{tikzpicture}[font=\sffamily\small,x=11cm]
+\foreach \y/\n/\v/\c in {0/basic GRU/0.2469/prec,-0.65/best GRU (+ GloVe)/0.4985/defc,-1.3/T5-small fine-tuned/0.8626/thmc} {
+  \fill[\c!30,draw=\c] (0,\y) rectangle (\v,\y+0.45); \node[anchor=west] at (\v+0.01,\y+0.22) {\v};
+  \node[anchor=east,font=\sffamily\scriptsize] at (-0.01,\y+0.22) {\n};}
+\end{tikzpicture}
+\end{pic}
+Say: ``0.36 above the best RNN. One article is worth about 0.01, so this gap is about 36 articles' worth: far beyond noise.''
+\end{sayit}
+
+%=====================================================================
+\section{How it works}
+\begin{enumerate}
+  \item Tokenize the raw articles and titles into subwords; cut to 512 and 64 tokens.
+  \item Load \code{google-t5/t5-small} with its pretrained weights.
+  \item Train with Seq2SeqTrainer: 3 epochs over the 13.4k pairs, batch 8, learning rate $2\times10^{-5}$.
+  \item Generate a title for each of the 100 test articles with beam search of width 5, and score with ROUGE.
+\end{enumerate}
+
+%=====================================================================
+\section{The number: 0.86 ROUGE-L}
+
+\begin{measured}[The number]
+\begin{itemize}
+  \item \textbf{0.8626 ROUGE-L} (also 0.8626 ROUGE-1, 0.6516 ROUGE-2) on 100 test articles.
+  \item \textbf{Outperforming all RNN models:} the best RNN, with GloVe, is 0.4985; the gap is 0.364.
+  \item \textbf{The catch:} the RNNs were scored against cleaned titles and T5 against raw ones, so the two numbers aren't measured identically. The gap is so large that the conclusion stands.
+\end{itemize}
+\end{measured}
+
+%=====================================================================
+\section{What they will ask}
+
+\begin{iq}[\core]{Why does T5 beat the RNNs by so much?}
+Two things. Pretraining: T5 arrives knowing language from a huge corpus, while the RNN learns from 13.4k pairs. And attention: T5's decoder looks at every input token at every step, while the RNN's decoder sees one fixed vector. Subword tokens help too: T5 can write names the RNN's vocabulary turned into \code{<UNK>}.
+\end{iq}
+
+\begin{iq}[\core]{Explain self-attention.}
+Each token makes a query, a key and a value. A token's output is the average of all values, weighted by how well its query matches each key: softmax of $q \cdot k / \sqrt d$. So every token can draw on every other, in one step, whatever the distance.
+\end{iq}
+
+\begin{iq}[\core]{Why such a small learning rate?}
+The weights already hold what pretraining learned. A large step would overwrite it with what 13.4k pairs can teach, which is much less. $2\times10^{-5}$ nudges the model towards the task.
+\end{iq}
+
+\begin{iq}{What does Seq2SeqTrainer do for you?}
+The training loop: batching, the loss, the optimizer and schedule, evaluation, and generation with beam search through \code{predict\_with\_generate}. You supply the model, tokenized data and settings.
+\end{iq}
+
+\begin{iq}{Anything wrong in your fine-tuning?}
+Yes: padded positions in the target titles weren't set to $-100$, so the loss also scored the padding. \code{DataCollatorForSeq2Seq} fixes it. The score might improve a little; I'd re-run before claiming it.
+\end{iq}
+
+\begin{iq}{Why truncate to 512 tokens?}
+T5's attention cost grows with the square of the length, and 512 is its standard limit. A Wikipedia article's subject is in its first lines, so the title's evidence survives the cut.
+\end{iq}
+
+\begin{bugfix}[Don't say]
+\begin{itemize}
+  \item ``T5 beat everything.'' Flan-T5-large with the better prompt is 0.87.
+  \item ``Trained T5 from scratch.'' It was fine-tuned from pretrained weights.
+  \item ``T5 used the cleaned text.'' It read raw text with its own subword tokenizer.
+\end{itemize}
+\end{bugfix}
