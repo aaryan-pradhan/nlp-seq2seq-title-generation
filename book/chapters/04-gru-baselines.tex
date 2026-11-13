@@ -1,0 +1,291 @@
+\chapter{Bullet 1: the GRU baselines}
+\label{ch:gru}
+
+\begin{cvline}
+Built bidirectional GRU encoder-decoder baselines in PyTorch with GloVe-300d, beam search, and teacher forcing across 13.4k pairs
+\end{cvline}
+
+%=====================================================================
+\section{Words you need}
+
+\subsection*{Getting the text ready}
+
+\begin{definition}[Article--title pair]
+An \dfn{article--title pair} is one training example: an article's text and its true title. About 13.9k articles were given for training; the last 500 were kept aside for checking during training, leaving $13{,}879 - 500 = 13{,}379 \approx 13.4$k pairs to learn from.
+\end{definition}
+
+\begin{definition}[Batch, epoch, learning rate]
+Training updates the weights many times. Each update uses a \dfn{batch}, a small group of training pairs. An \dfn{epoch} is one full pass over all the pairs. The \dfn{learning rate} is the size of each update step: too big and training jumps about, too small and it crawls.
+\end{definition}
+
+\begin{definition}[Lemmatization, stopwords]
+\dfn{Lemmatization} reduces a word to its dictionary form: ``fought'' becomes ``fight'', ``armies'' becomes ``army''. \dfn{Stopwords} are very common words with little meaning on their own, such as ``the'', ``of'', ``and''. The cleaning step, done with the spaCy library in batches, lowercased, lemmatized and dropped stopwords and punctuation.
+\end{definition}
+
+\begin{definition}[Vocabulary, special tokens]
+The \dfn{vocabulary} is the fixed list of words the model can read and write, each with a number. Here a word is kept only if it appears in at least 1\% of articles, about 139 of the 13,879. Four \dfn{special tokens} are added: \code{<SOS>} (start of title), \code{<EOS>} (end of title), \code{<PAD>} (filler) and \code{<UNK>} (any word not in the vocabulary).
+\end{definition}
+
+\begin{definition}[Padding]
+Articles in one batch have different lengths, but a batch must be a rectangle of numbers. \dfn{Padding} fills the short ones with \code{<PAD>} up to the longest. The loss must ignore those positions.
+\end{definition}
+
+\subsection*{Words as vectors}
+
+\begin{definition}[Word embedding, cosine similarity]
+A \dfn{word embedding} gives each word a vector of numbers, so that words used in similar ways get similar vectors. The usual measure of ``similar'' is the \dfn{cosine similarity}:
+\[
+\cos(\mathbf{u}, \mathbf{v}) = \frac{\mathbf{u}\cdot\mathbf{v}}{\lVert \mathbf{u}\rVert\,\lVert \mathbf{v}\rVert},
+\]
+which is 1 for vectors pointing the same way and 0 for unrelated (perpendicular) ones.
+\end{definition}
+
+\begin{example}[Toy: three words in 3 dimensions]
+$\text{war} = (0.9, 0.1, 0.2)$, $\text{battle} = (0.8, 0.2, 0.1)$, $\text{music} = (0.1, 0.9, 0.3)$.
+\begin{steps}
+  \item $\cos(\text{war}, \text{battle}) = \dfrac{0.72 + 0.02 + 0.02}{0.927 \times 0.831} = 0.987$: almost the same direction.
+  \item $\cos(\text{war}, \text{music}) = \dfrac{0.09 + 0.09 + 0.06}{0.927 \times 0.954} = 0.271$: far apart.
+\end{steps}
+\end{example}
+
+\begin{definition}[GloVe-300d]
+\dfn{GloVe} is a set of word embeddings already learned from billions of words of web and Wikipedia text; ``300d'' means each word is a vector of 300 numbers. Here GloVe vectors were loaded into the encoder's embedding layer and frozen (not changed by training). They bring in word meaning that 13.4k pairs alone could never teach.
+\end{definition}
+
+\subsection*{Reading a sequence: the GRU}
+
+\begin{definition}[Recurrent network, hidden state]
+A \dfn{recurrent neural network} reads a sequence one token at a time. After each token it updates a vector called the \dfn{hidden state}, its running memory of everything read so far: $h_t = f(h_{t-1}, x_t)$, where $x_t$ is the embedding of token $t$.
+\end{definition}
+
+\begin{definition}[GRU equations: update and reset gates]
+A GRU chooses $f$ with two \dfn{gates}, numbers between 0 and 1 made by the sigmoid $\sigma(a) = 1/(1 + e^{-a})$:
+\[
+\begin{aligned}
+z_t &= \sigma(W_z x_t + U_z h_{t-1}) && \text{update gate: how much to change}\\
+r_t &= \sigma(W_r x_t + U_r h_{t-1}) && \text{reset gate: how much old memory to use}\\
+\tilde h_t &= \tanh\bigl(W x_t + U (r_t \odot h_{t-1})\bigr) && \text{candidate new memory}\\
+h_t &= (1 - z_t) \odot h_{t-1} + z_t \odot \tilde h_t && \text{mix old and new}
+\end{aligned}
+\]
+The $W$s and $U$s are weight matrices learned in training, and $\odot$ multiplies entry by entry. The last line is a weighted average: if $z_t$ is near 0 the memory is kept; near 1 it is replaced.
+\end{definition}
+
+\begin{example}[Toy: one GRU step with single numbers]
+Every weight is 1, the input is $x = 1$ and the old memory is $h = 0.5$.
+\begin{steps}
+  \item $z = \sigma(1 + 0.5) = \sigma(1.5) = 0.818$; likewise $r = 0.818$.
+  \item $\tilde h = \tanh(1 + 0.818 \times 0.5) = \tanh(1.409) = 0.887$.
+  \item $h = (1 - 0.818) \times 0.5 + 0.818 \times 0.887 = 0.091 + 0.726 = 0.817$.
+\end{steps}
+The new memory moved most of the way to the candidate, because the update gate is high.
+\end{example}
+
+\begin{definition}[Bidirectional encoder, bottleneck]
+A \dfn{bidirectional} encoder runs one GRU left to right and another right to left, and joins their final hidden states, so the summary sees both ends of the article. In this model the decoder starts from that one fixed-size vector and sees nothing else of the article. That single vector is the \dfn{bottleneck}: a whole article squeezed into 300-odd numbers.
+\end{definition}
+
+\subsection*{Training the decoder}
+
+\begin{definition}[Teacher forcing, exposure bias]
+In \dfn{teacher forcing}, during training the decoder's input at each step is the \emph{true} previous title word, not the word it guessed. Training is faster and steadier. The cost is \dfn{exposure bias}: at test time the decoder must feed on its own guesses, which it never practised, so one early mistake can derail the rest.
+\end{definition}
+
+\begin{definition}[Cross-entropy loss, ignoring padding]
+At each title position the decoder gives a probability to every vocabulary word. The \dfn{cross-entropy loss} at that position is $-\ln p(\text{true word})$, and the training loss is the average over the real positions. \code{<PAD>} positions are skipped (\code{ignore\_index}), or the model would learn to predict filler.
+\end{definition}
+
+\begin{example}[Toy: a title of two words and one pad]
+The model gives the true words probabilities $0.6$ and $0.3$; the third position is \code{<PAD>}.
+\begin{steps}
+  \item Losses: $-\ln 0.6 = 0.511$ and $-\ln 0.3 = 1.204$; the pad is skipped.
+  \item Average over the 2 real positions: $(0.511 + 1.204)/2 = 0.857$.
+\end{steps}
+\end{example}
+
+\begin{definition}[Mixed precision]
+\dfn{Mixed precision} (fp16) does most arithmetic with 16-bit numbers instead of 32-bit ones: half the memory and faster on a GPU, with the sensitive parts kept in 32 bits. Hugging Face Accelerate switched it on in a few lines.
+\end{definition}
+
+\subsection*{Writing the title}
+
+\begin{definition}[Greedy decoding, beam search]
+\dfn{Greedy decoding} picks the single most likely word at every step. \dfn{Beam search} keeps the $k$ best partial titles (here $k = 5$) at every step, extends each by every word, and keeps the $k$ best again, scored by the \emph{sum of log-probabilities}, which is the log of the whole title's probability.
+\end{definition}
+
+\begin{example}[Toy: beam search finds what greedy misses]
+Step 1: ``paris'' 0.5, ``city'' 0.4. After ``paris'' the best next word has 0.4; after ``city'' the next word ``lights'' has 0.9.
+\begin{steps}
+  \item Greedy takes ``paris'' (0.5), then its best follower: whole title probability $0.5 \times 0.4 = 0.20$.
+  \item A beam of 2 also keeps ``city'' and finds ``city lights'': $0.4 \times 0.9 = 0.36$.
+  \item In logs: $\ln 0.20 = -1.61$ against $\ln 0.36 = -1.02$. Beam search picks the higher one.
+\end{steps}
+\end{example}
+
+\begin{sayit}[Say it in 20 seconds]
+I wrote a GRU encoder--decoder from scratch in PyTorch and trained it on 13.4k article--title pairs. The encoder is bidirectional; the decoder learns with teacher forcing and a cross-entropy loss that ignores padding. Then I stacked improvements: frozen GloVe 300-dimensional embeddings, a hierarchical encoder, a two-layer decoder and beam search of width 5. GloVe doubled ROUGE-L from 0.25 to 0.50; the rest didn't help.
+\end{sayit}
+
+%=====================================================================
+\section{The picture}
+
+\begin{sayit}[Board E · Cleaning and the vocabulary]
+\begin{pic}
+\begin{tikzpicture}[>={Latex[length=2mm]},font=\sffamily\small,
+  box/.style={draw=#1L,fill=#1,rounded corners=2pt,align=center,minimum height=9mm,inner sep=3pt,text width=30mm}]
+\node[box=bdq] (a) at (0,0) {``The armies fought at Hastings in 1066.''};
+\node[box=bdy] (b) at (4,0) {spaCy: lowercase, lemmas, no stopwords};
+\node[box=bda] (c) at (8,0) {army fight hastings};
+\node[box=bdv] (d) at (8,-1.8) {IDs: 412, 87, \code{<UNK>}};
+\draw[->] (a) -- (b); \draw[->] (b) -- (c); \draw[->] (c) -- node[right,font=\sffamily\scriptsize,align=left]{word in $<$1\% of\\articles $\to$ \code{<UNK>}} (d);
+\end{tikzpicture}
+\end{pic}
+Say: ``Cleaning shrinks the vocabulary, but it also throws away what titles need: rare names become \code{<UNK>}, and a model can't write a word it can't represent.'' (The IDs here are made up.)
+\end{sayit}
+
+\begin{sayit}[Board F · Embeddings: similar words point the same way]
+\begin{pic}
+\begin{tikzpicture}[>={Latex[length=2mm]},font=\sffamily\small,scale=2.4]
+\draw[->,prec] (0,0) -- (1.3,0); \draw[->,prec] (0,0) -- (0,1.15);
+\draw[->,very thick,trapc] (0,0) -- (8:1) node[anchor=west]{war};
+\draw[->,very thick,trapc!60] (0,0) -- (26:1) node[anchor=west]{battle};
+\draw[->,very thick,defc] (0,0) -- (80:1) node[anchor=south]{music};
+\node[thmc,anchor=west,font=\sffamily\scriptsize] at (1.35,0.3) {war--battle: small angle, cos 0.99};
+\node[defc,anchor=west,font=\sffamily\scriptsize] at (0.35,0.9) {war--music: large angle, cos 0.27};
+\end{tikzpicture}
+\end{pic}
+Say: ``GloVe puts words used alike in similar directions. Starting from those vectors, the encoder already knows that `war' and `battle' are related.''
+\end{sayit}
+
+\begin{sayit}[Board G · Inside one GRU step]
+\begin{pic}
+\begin{tikzpicture}[>={Latex[length=2mm]},font=\sffamily\small,
+  box/.style={draw=#1L,fill=#1,rounded corners=2pt,align=center,minimum height=8mm,inner sep=3pt}]
+\node (hp) at (0,0) {$h_{t-1}$}; \node (x) at (0,-2) {$x_t$};
+\node[box=bda] (z) at (2.6,0.8) {update $z_t$};
+\node[box=bda] (r) at (2.6,-0.8) {reset $r_t$};
+\node[box=bdv] (c) at (5.4,-0.8) {candidate $\tilde h_t$};
+\node[box=bdg] (h) at (8.4,0) {$h_t = (1 - z)h_{t-1} + z\,\tilde h_t$};
+\draw[->] (hp) -- (z); \draw[->] (hp) -- (r); \draw[->] (x) -- (z); \draw[->] (x) -- (r); \draw[->] (x) -| (c);
+\draw[->] (r) -- (c); \draw[->] (z) -- (h); \draw[->] (c) -- (h);
+\draw[->,prec] (hp) .. controls (3,2) and (7,2) .. node[above,font=\sffamily\scriptsize]{keep old memory} (h);
+\end{tikzpicture}
+\end{pic}
+Say: ``Two gates. The reset gate decides how much old memory goes into the new candidate; the update gate decides how much of the memory to replace. Toy: $h$ goes from 0.5 to 0.817.''
+\end{sayit}
+
+\begin{sayit}[Board H · The bottleneck: one vector for the whole article]
+\begin{pic}
+\begin{tikzpicture}[>={Latex[length=2mm]},font=\sffamily\small,
+  box/.style={draw=#1L,fill=#1,rounded corners=2pt,align=center,minimum height=8mm,inner sep=3pt}]
+\foreach \i in {0,...,5} {\node[box=bdq,minimum width=8mm] (f\i) at (\i*1.1,0.7) {}; \node[box=bdq,minimum width=8mm] (b\i) at (\i*1.1,-0.5) {};}
+\foreach \i [evaluate=\i as \j using int(\i+1)] in {0,...,4} {\draw[->] (f\i) -- (f\j); \draw[->] (b\j) -- (b\i);}
+\node[font=\sffamily\scriptsize,anchor=east] at (-0.6,0.7) {left $\to$ right}; \node[font=\sffamily\scriptsize,anchor=east] at (-0.6,-0.5) {right $\to$ left};
+\node[box=bdr] (v) at (8,0.1) {one vector\\(the bottleneck)};
+\draw[->] (f5) -- (v); \draw[->] (b0) |- ++(0,-0.8) -| (v);
+\node[box=bdv] (d) at (11,0.1) {decoder};
+\draw[->] (v) -- (d);
+\end{tikzpicture}
+\end{pic}
+Say: ``Two GRUs read the article both ways, and their final states are all the decoder ever sees. A whole article in a few hundred numbers is the weakness Transformers fix.''
+\end{sayit}
+
+\begin{sayit}[Board I · Teacher forcing: training against testing]
+\begin{pic}
+\begin{tikzpicture}[>={Latex[length=2mm]},font=\sffamily\small,
+  box/.style={draw=#1L,fill=#1,rounded corners=2pt,align=center,minimum height=7mm,inner sep=3pt,minimum width=16mm}]
+\node[anchor=west,font=\sffamily\small\bfseries] at (-1.4,1.5) {Training (teacher forcing)};
+\foreach \w/\o [count=\i from 0] in {\code{<SOS>}/battle,battle/of,of/hastings} {\node[box=bdg] (i\i) at (\i*3.5,0.6) {\w}; \node[box=bdv] (o\i) at (\i*3.5+1.8,0.6) {$\to$ \o?};}
+\node[anchor=west,font=\sffamily\small\bfseries] at (-1.4,-0.5) {Testing (own guesses)};
+\node[box=bdg] (j0) at (0,-1.4) {\code{<SOS>}}; \node[box=bdv] (p0) at (1.8,-1.4) {$\to$ battle};
+\node[box=bdr] (j1) at (3.5,-1.4) {battle}; \node[box=bdv] (p1) at (5.3,-1.4) {$\to$ at};
+\node[box=bdr] (j2) at (7,-1.4) {at}; \node[box=bdv] (p2) at (8.8,-1.4) {$\to$ sea};
+\draw[->,trapc] (p1.south) .. controls +(0,-0.5) and +(0,-0.5) .. (j2.south);
+\end{tikzpicture}
+\end{pic}
+Say: ``In training the decoder always gets the true previous word. At test time it feeds on its own guesses; one wrong word, `at', and the rest goes off course. That gap is exposure bias.''
+\end{sayit}
+
+\begin{sayit}[Board J · Beam search keeps more than one option]
+\begin{pic}
+\begin{tikzpicture}[>={Latex[length=2mm]},font=\sffamily\small,
+  box/.style={draw=#1L,fill=#1,rounded corners=2pt,align=center,minimum height=7mm,inner sep=3pt}]
+\node[box=bdq] (s) at (0,0) {\code{<SOS>}};
+\node[box=bda] (p) at (3,0.9) {paris 0.5}; \node[box=bda] (c) at (3,-0.9) {city 0.4};
+\node[box=bdr] (pp) at (6.6,0.9) {+ best 0.4: total 0.20};
+\node[box=bdg] (cl) at (6.6,-0.9) {+ lights 0.9: total 0.36};
+\draw[->] (s) -- (p); \draw[->] (s) -- (c); \draw[->] (p) -- (pp); \draw[->] (c) -- (cl);
+\node[font=\sffamily\scriptsize,text=trapc,anchor=west] at (8.6,0.9) {greedy's answer};
+\node[font=\sffamily\scriptsize,text=thmc,anchor=west] at (8.6,-0.9) {beam's answer};
+\end{tikzpicture}
+\end{pic}
+Say: ``Greedy commits to the best first word and can't go back. Beam search keeps 5 candidates and compares whole titles by the sum of log-probabilities.''
+\end{sayit}
+
+\begin{sayit}[Board K · What each RNN change did (ROUGE-L, cumulative)]
+\begin{pic}
+\begin{tikzpicture}[font=\sffamily\small,x=11cm]
+\foreach \y/\n/\v/\c in {0/basic bi-GRU (B1)/0.2469/prec,-0.65/+ GloVe-300d/0.4985/thmc,-1.3/+ hierarchical encoder/0.3254/trapc,-1.95/+ two-layer decoder/0.3016/trapc,-2.6/+ beam search (width 5)/0.3262/trapc} {
+  \fill[\c!30,draw=\c] (0,\y) rectangle (\v,\y+0.45); \node[anchor=west] at (\v+0.01,\y+0.22) {\v};
+  \node[anchor=east,font=\sffamily\scriptsize] at (-0.01,\y+0.22) {\n};}
+\end{tikzpicture}
+\end{pic}
+Say: ``Each row adds one change on top of the last. GloVe doubled the score; everything stacked on it after that lowered it. Outside knowledge helped, extra structure didn't.''
+\end{sayit}
+
+%=====================================================================
+\section{How it works}
+\begin{enumerate}
+  \item Clean the text with spaCy (in batches, unneeded parts of spaCy switched off) and build the 1\% vocabulary.
+  \item Turn each article and title into word IDs; pad each batch.
+  \item Encoder: embeddings (GloVe from the second model on), then a bidirectional GRU, hidden size 300.
+  \item Decoder: a GRU fed the true previous word (teacher forcing); cross-entropy ignoring \code{<PAD>}; Adam with learning rate $10^{-3}$, gradients clipped at 1.0, 3 epochs, fp16.
+  \item Generate titles greedily, or with beam search of width 5, and score them with ROUGE.
+\end{enumerate}
+
+%=====================================================================
+\section{The numbers: 13.4k pairs, GloVe, beam search}
+
+\begin{measured}[The number]
+\begin{itemize}
+  \item \textbf{13.4k pairs:} $13{,}879 - 500 = 13{,}379$ training pairs.
+  \item \textbf{GloVe:} ROUGE-L 0.247 $\to$ 0.499, about $2\times$; the training loss was also lower at every epoch.
+  \item \textbf{Beam search:} made evaluation about $6.85/1.19 = 5.8\times$ slower for no clear gain.
+  \item \textbf{The catch:} the GloVe run also changed how outputs were cut before scoring, so part of the jump is measurement. The lower training loss is the trustworthy signal.
+\end{itemize}
+\end{measured}
+
+%=====================================================================
+\section{What they will ask}
+
+\begin{iq}[\core]{Why did GloVe help so much?}
+With 13.4k pairs the model can't learn what words mean on its own. GloVe brings meanings learned from billions of words, so the encoder starts knowing that ``battle'' and ``war'' are related. Pretrained knowledge, the same lesson as T5 later.
+\end{iq}
+
+\begin{iq}[\core]{Why didn't the hierarchical encoder help?}
+It reads words into sentence vectors, then sentences into an article vector, so it needs sentence boundaries. My cleaning had already removed punctuation, so there were no real sentences, and padding diluted the averages. The training loss rose from 1.30 to 3.12. The lesson: an architecture only helps if the data pipeline supports it.
+\end{iq}
+
+\begin{iq}[\core]{What is teacher forcing, and what's the catch?}
+In training, the decoder gets the true previous word as input. It learns faster, but at test time it must use its own guesses, which it never practised: exposure bias. Scheduled sampling, feeding it its own guesses some of the time, is the usual fix.
+\end{iq}
+
+\begin{iq}{Why bidirectional?}
+A left-to-right GRU's final state is dominated by the end of the article, but a Wikipedia article names its subject in the first sentence. Reading both ways gives the summary both ends.
+\end{iq}
+
+\begin{iq}{Why didn't beam search help?}
+Two reasons. My implementation ranked candidates on raw scores instead of summed log-probabilities, which is a bug. And beam search can't rescue a weak model: it only searches better among the model's own guesses.
+\end{iq}
+
+\begin{iq}{What would fix the bottleneck?}
+Attention: let the decoder look at every encoder state at each step, weighted by relevance (Bahdanau or Luong attention). That is exactly the idea Transformers are built on.
+\end{iq}
+
+\begin{bugfix}[Don't say]
+\begin{itemize}
+  \item ``Beam search improved the model.'' It didn't, and it ranked raw scores.
+  \item ``The RNN learns when to stop.'' No \code{<EOS>} was added to training titles, so it couldn't.
+  \item ``GloVe was fine-tuned.'' It was frozen.
+\end{itemize}
+\end{bugfix}
