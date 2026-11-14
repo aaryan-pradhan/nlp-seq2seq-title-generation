@@ -1,0 +1,475 @@
+\chapter{Pretraining at scale}
+\label{ch:pre}
+
+\begin{question}
+How many weights does an LLM have, how long and on what hardware is it trained, what loss does it minimise, and how are the weights updated?
+\end{question}
+
+\begin{whatfor}
+Every piece of the model is now built. This chapter trains it. It counts GPT-2 small's 124 million parameters piece by piece, turns a data set into training steps, adds up the memory one training run needs and splits the work across GPUs. Then it follows one sequence through a training step: the GELU activation, the next-token cross-entropy loss and what a loss value means, gradient descent and the Adam optimizer, gradient accumulation, the learning-rate schedule and checkpoints. It ends with how the trained base model generates text. Four cards: parameter count, training steps, next-token loss and training memory.
+\end{whatfor}
+
+\begin{setup}
+\textbf{The system:} GPT-2 small: embedding size $d = 768$, context 1,024, 12 blocks, 12 heads, vocabulary $V = 50{,}257$.
+\textbf{The one thing traced:} one batch of token windows, from the data set through the loss to a weight update.
+\end{setup}
+
+\begin{recall}
+\textbf{Recall.} Chapter 9: windows of the context length, labels shifted by one. Chapter 11: a block holds multi-head attention ($W^Q, W^K, W^V, W^O$) and a feed-forward network ($d \to 4d \to d$); the output layer is tied to the embedding matrix. Chapter 4: the \emph{cross-entropy loss} is $-\ln$ of the probability given to the right answer; the \emph{learning rate} is the size of each update step; a \emph{batch} is the group of examples used for one update, and an \emph{epoch} one full pass over the data.
+\end{recall}
+
+%=====================================================================
+\section{Words you need}
+
+\subsection*{How big the model is}
+
+\begin{definition}[Parameter count]
+The \dfn{parameter count} is the number of trainable weights. Biases and layer-norm weights add only a few thousand per layer and are ignored here.
+\begin{itemize}
+  \item Embedding matrix: $V \times d$.
+  \item Positional table (learned): $n_{\text{ctx}} \times d$.
+  \item Per block, attention: four $d \times d$ matrices, $4d^2$.
+  \item Per block, feed-forward: $d \times 4d$ and $4d \times d$, so $8d^2$.
+  \item Output layer: 0 extra when tied to the embedding matrix.
+\end{itemize}
+\end{definition}
+
+\begin{example}[GPT-2 small: 124 million]
+$V = 50{,}257$, $d = 768$, $n_{\text{ctx}} = 1{,}024$, 12 blocks.
+\begin{steps}
+  \item Embedding: $50{,}257 \times 768 = 38{,}597{,}376$ (about 38.6 million).
+  \item Positions: $1{,}024 \times 768 = 786{,}432$ (about 0.8 million).
+  \item Attention per block: $4 \times 768^2 = 2{,}359{,}296$ (2.4 million).
+  \item Feed-forward per block: $8 \times 768^2 = 4{,}718{,}592$ (4.7 million).
+  \item One block: $2{,}359{,}296 + 4{,}718{,}592 = 7{,}077{,}888$; twelve: $84{,}934{,}656$ (85 million).
+  \item Total: $38{,}597{,}376 + 786{,}432 + 84{,}934{,}656 = 124{,}318{,}464 \approx 124$ million.
+\end{steps}
+Today's LLMs have billions to trillions of parameters: more blocks, wider vectors, more heads.
+\end{example}
+
+\subsection*{How long it trains}
+
+\begin{definition}[Training step]
+A \dfn{training step} is one weight update: one batch of $B$ windows of $n_{\text{ctx}}$ tokens goes forward, the loss is computed, gradients flow back, the weights change. Each step processes $B \times n_{\text{ctx}}$ tokens. LLM training is counted in steps, not epochs: the data sets are so large that most examples are seen only once.
+\end{definition}
+
+\begin{definition}[Tokens trained on]
+The \dfn{tokens trained on} is steps $\times\, B \times n_{\text{ctx}}$: the total number of tokens the model processed. Reports say ``model X was trained on Y tokens''.
+\end{definition}
+
+\begin{example}[One pass over 50 million tokens]
+$n_{\text{ctx}} = 1{,}024$, $B = 32$.
+\begin{steps}
+  \item Tokens per step: $1{,}024 \times 32 = 32{,}768$.
+  \item Steps: $50{,}000{,}000 / 32{,}768 = 1{,}525.9$, so about $1{,}526$.
+\end{steps}
+Fifty million tokens is tiny: real pretraining uses trillions, so steps run into the hundreds of thousands and beyond.
+\end{example}
+
+\subsection*{How much memory it needs}
+
+\begin{definition}[Training memory]
+\dfn{Training memory} has four parts.
+\begin{itemize}
+  \item \textbf{Weights}: one number per parameter; 4 bytes each in 32-bit floating point.
+  \item \textbf{Gradients}: one per parameter, the same size again.
+  \item \textbf{Optimizer state}: Adam (below) keeps two more numbers per parameter, twice the weights.
+  \item \textbf{Activations}: every layer's outputs, kept for the backward pass; they grow with batch size, context length and number of layers.
+\end{itemize}
+Forgetting the activations is the classic surprise: the model loads fine, then training stops with a CUDA out-of-memory error.
+\end{definition}
+
+\begin{example}[1 billion parameters in 32-bit]
+Four bytes per number.
+\begin{steps}
+  \item Weights: $10^9 \times 4$ bytes $= 4$ GB.
+  \item Gradients: 4 GB. Adam state: 8 GB. Subtotal 16 GB.
+  \item Activations: about 10--15 GB for a typical batch.
+  \item Total: $26$ to $31$ GB, about 30 GB, against 4 GB to merely load the weights.
+\end{steps}
+\end{example}
+
+\subsection*{Spreading it over GPUs}
+
+\begin{definition}[Data, pipeline and tensor parallelism]
+One H100 GPU has 80 GB. Larger models need several GPUs working on one model.
+\begin{itemize}
+  \item \dfn{Data parallelism}: every GPU holds the whole model; the batch is split into micro-batches, one per GPU, and the gradients are averaged across GPUs before the update. Faster training, but the model must fit on one GPU.
+  \item \dfn{Pipeline parallelism}: the layers are split across GPUs, each passing its activations to the next. GPUs wait for each other, so some sit idle.
+  \item \dfn{Tensor parallelism}: each big matrix product is itself split across GPUs and the pieces combined. Better use of every GPU, but much more communication between them.
+\end{itemize}
+Real runs combine them (hybrid parallelism), and still take weeks or months.
+\end{definition}
+
+\subsection*{One training step, in detail}
+
+\begin{definition}[GELU]
+After the first linear layer of the feed-forward network comes a non-linear activation. GPT uses \dfn{GELU}: $\operatorname{GELU}(x) = x\,\Phi(x)$, where $\Phi(x)$ is the probability that a standard normal variable is at most $x$. It is a smooth version of ReLU ($\max(0, x)$): close to $x$ for large positive $x$, close to 0 for large negative $x$, with a gentle curve in between, which helps gradients flow. SwiGLU is a common alternative.
+\end{definition}
+
+\begin{example}[GELU at $\pm 1$]
+Using $\Phi$ from a normal table.
+\begin{steps}
+  \item $\Phi(1) = 0.841$, so $\operatorname{GELU}(1) = 1 \times 0.841 = 0.841$ (ReLU gives 1).
+  \item $\Phi(-1) = 0.159$, so $\operatorname{GELU}(-1) = -1 \times 0.159 = -0.159$ (ReLU gives 0).
+\end{steps}
+\end{example}
+
+\begin{definition}[Sparse categorical cross-entropy]
+For a classification over $C$ classes with predicted probabilities $p_1, \dots, p_C$, \dfn{categorical cross-entropy} compares them with a one-hot label $y$: $-\sum_c y_c \ln p_c$. Every term with $y_c = 0$ vanishes, leaving $-\ln p_{\text{correct}}$. So it is enough to store the label as a class index, not a one-hot vector: that is \dfn{sparse categorical cross-entropy}. For an LLM, $C = V = 50{,}257$, so storing indices saves a vector of 50,257 numbers per position. The loss is small when the right token gets a high probability, large when it gets a low one.
+\end{definition}
+
+\begin{example}[Four classes]
+Predicted $(0.10, 0.70, 0.15, 0.05)$, correct class 2.
+\begin{steps}
+  \item One-hot label $(0, 1, 0, 0)$: $-(0 + 1 \cdot \ln 0.70 + 0 + 0) = 0.357$.
+  \item Index label 2: $-\ln p_2 = -\ln 0.70 = 0.357$. The same number, without the zeros.
+\end{steps}
+\end{example}
+
+\begin{remark}[Loss at every position]
+A window of $n$ tokens gives $n$ next-token predictions (chapter 9), so the loss is averaged over all $n$ positions. The causal mask makes sure each position used only the tokens before it: this objective is called causal language modelling.
+\end{remark}
+
+\begin{example}[Five positions]
+The model gives the five correct next tokens probabilities $0.01, 0.05, 0.02, 0.03, 0.01$.
+\begin{steps}
+  \item Losses $-\ln p$: $4.605, 2.996, 3.912, 3.507, 4.605$.
+  \item Mean: $19.625/5 = 3.92$, a loss of about 4.
+\end{steps}
+\end{example}
+
+\begin{definition}[Random-guess loss]
+The \dfn{random-guess loss} is the loss of a model that gives every token the same probability $1/V$: $-\ln(1/V) = \ln V$. A fresh model starts near it; training should push the loss well below it.
+\end{definition}
+
+\begin{example}[Is a loss of 3 good?]
+Compare it with random guessing.
+\begin{steps}
+  \item $V = 50{,}257$: random guessing gives $\ln 50{,}257 = 10.82$. A loss of 3 is far below: good.
+  \item $V = 100$: random guessing gives $\ln 100 = 4.61$. A loss of 3 is only a little better.
+  \item Another view: a loss of 3 means the right token gets on average about $e^{-3} = 0.050$, as if choosing among $e^3 \approx 20$ equally likely tokens.
+\end{steps}
+\end{example}
+
+\subsection*{Updating the weights}
+
+\begin{definition}[Gradient descent]
+The gradient $\partial L/\partial w$ says how the loss changes when weight $w$ grows: positive means the loss rises. \dfn{Gradient descent} steps against it, scaled by the learning rate $\eta$:
+\[
+w \leftarrow w - \eta\, \frac{\partial L}{\partial w}.
+\]
+Too large an $\eta$ overshoots the minimum; too small crawls. The loss surface can also have many local minima where plain gradient descent gets stuck.
+\end{definition}
+
+\begin{example}[One weight, $L(w) = (w - 3)^2$]
+Start at $w = 5$, where $L = 4$ and the gradient is $2(w - 3) = 4$.
+\begin{steps}
+  \item $\eta = 0.1$: $w = 5 - 0.1 \times 4 = 4.6$, $L = 1.6^2 = 2.56$. Lower: good.
+  \item $\eta = 1.1$: $w = 5 - 1.1 \times 4 = 0.6$, $L = (-2.4)^2 = 5.76$. Jumped past the minimum at 3 and got worse.
+\end{steps}
+\end{example}
+
+\begin{definition}[Adam optimizer]
+The \dfn{Adam optimizer} improves on gradient descent. It keeps, for every parameter, a moving average of past gradients (the first moment, which acts as momentum and helps roll through small dips) and of past squared gradients (the second moment, which shrinks steps where the slope is steep or noisy). Those two numbers per parameter are the optimizer state. AdamW, Adam with weight decay, is the usual choice for LLMs.
+\end{definition}
+
+\begin{definition}[Gradient accumulation]
+When a batch of 32 does not fit in memory, \dfn{gradient accumulation} runs smaller micro-batches (say two of 16), back-propagates each, adds up their gradients without updating or resetting, then averages and updates once. It behaves almost like the larger batch at the memory cost of the smaller one.
+\end{definition}
+
+\begin{definition}[Learning-rate warm-up]
+The learning rate is not kept fixed. During \dfn{learning-rate warm-up} it rises gradually from near 0 to its maximum over a set number of steps; afterwards it decays slowly so training settles. The number of warm-up steps and the decay shape are chosen per model and data set.
+\end{definition}
+
+\begin{definition}[Model checkpoint]
+A \dfn{model checkpoint} is the training state saved at regular intervals (weights and optimizer state), so a crash costs only the work since the last save.
+\end{definition}
+
+\subsection*{After pretraining}
+
+\begin{remark}[Generating with the base model]
+Pretraining produces the base model. To generate, the prompt (``AI stands for'') is tokenized and run through the model. The loss used every position; generation uses only the last position's probabilities, since only the last token has attended to the whole context. A token ID is sampled (chapter 12), decoded back to text by the tokenizer, and appended as an ID (no re-tokenizing), and the loop repeats until a length limit or another stop condition.
+\end{remark}
+
+\begin{remark}[Then fine-tuning]
+Fine-tuning trains further on a smaller, higher-quality, chat-formatted data set (chapter 8). Full fine-tuning updates every layer; parameter-efficient fine-tuning updates only a small part. The objective stays the same: predict the next token.
+\end{remark}
+
+\begin{sayit}[Say it in 20 seconds]
+GPT-2 small has 124 million parameters: 38.6 million in the embeddings, 0.8 million in positions, and 7.1 million per block for twelve blocks. Training is counted in steps of batch times context tokens; 50 million tokens at 32 by 1,024 is about 1,526 steps. In 32-bit, each parameter costs 16 bytes for weights, gradients and Adam state, plus activations: about 30 GB for a 1-billion model, so big models are split by data, pipeline and tensor parallelism. The loss is sparse cross-entropy at every position; random guessing gives $\ln V \approx 10.8$. Adam with warm-up, gradient accumulation and checkpoints does the updating.
+\end{sayit}
+
+%=====================================================================
+\section{The picture}
+
+\begin{sayit}[Board 13.1 · Where GPT-2 small's 124 million live]
+\begin{pic}
+\begin{tikzpicture}[font=\sffamily\scriptsize,x=0.11cm]
+\foreach \a/\b/\c/\l in {0/38.6/bdv/embedding 38.6M,38.6/39.4/bdy/{},39.4/67.7/bda/attention $12 \times 2.36$M = 28.3M,67.7/124.3/bdg/feed-forward $12 \times 4.72$M = 56.6M} {
+  \fill[\c,draw=\c L] (\a,0) rectangle (\b,0.9);}
+\node at (19.3,0.45) {embedding 38.6M};
+\node at (53.5,0.45) {attention 28.3M};
+\node at (96,0.45) {feed-forward 56.6M};
+\draw[->] (39,1.3) -- (39,0.95); \node[above] at (39,1.3) {positions 0.8M};
+\node[anchor=north] at (62,-0.15) {total 124.3 million; output layer tied, so 0 extra};
+\end{tikzpicture}
+\end{pic}
+Say: ``Almost a third is the embedding table; the feed-forward layers are twice the attention, $8d^2$ against $4d^2$ per block.''
+\end{sayit}
+
+\begin{sayit}[Board 13.2 · Steps, not epochs]
+\begin{pic}
+\begin{tikzpicture}[font=\sffamily\scriptsize]
+\foreach \i in {0,...,13} \fill[defc!\the\numexpr 15+5*\i\relax,draw=defc!60] (\i*0.9,0) rectangle (\i*0.9+0.85,0.6);
+\node at (13.0,0.3) {\dots};
+\draw[decorate,decoration={brace,amplitude=4pt}] (0,0.7) -- (0.85,0.7) node[midway,above=4pt] {1 step $= 32 \times 1{,}024$ tokens};
+\node[anchor=north west] at (0,-0.1) {50 million tokens $\div$ 32,768 per step $\approx$ 1,526 steps for one pass; most text is never repeated};
+\end{tikzpicture}
+\end{pic}
+Say: ``The data is a stream cut into batches; each batch is one step. With trillions of tokens nobody counts epochs.''
+\end{sayit}
+
+\begin{sayit}[Board 13.3 · Memory for 1 billion parameters]
+\begin{pic}
+\begin{tikzpicture}[font=\sffamily\scriptsize,x=0.16cm]
+\fill[bdv,draw=bdvL] (0,0) rectangle (4,0.9); \node at (2,0.45) {W};
+\fill[bda,draw=bdaL] (4,0) rectangle (8,0.9); \node at (6,0.45) {G};
+\fill[bdy,draw=bdyL] (8,0) rectangle (16,0.9); \node at (12,0.45) {Adam};
+\fill[bdr,draw=bdrL] (16,0) rectangle (31,0.9); \node at (23.5,0.45) {activations};
+\draw[prec,dashed] (0,-0.2) rectangle (80,1.1); \node[anchor=east,text=prec] at (79.5,0.45) {one H100: 80 GB};
+\node[anchor=north west] at (0,-0.3) {weights 4 + gradients 4 + Adam 8 = 16 GB, plus activations: about 30 GB};
+\end{tikzpicture}
+\end{pic}
+Say: ``Loading needs 4 GB; training needs about 30. Gradients double it, Adam doubles it again, and activations come on top.''
+\end{sayit}
+
+\begin{sayit}[Board 13.4 · Three ways to split the work]
+\begin{pic}
+\begin{tikzpicture}[font=\sffamily\scriptsize,
+  gpu/.style={draw=prec,rounded corners=2pt,minimum width=12mm,minimum height=9mm,align=center}]
+\node[font=\sffamily\small\bfseries] at (1.9,1.4) {data};
+\foreach \i in {0,1,2} \node[gpu,fill=bdv] at (\i*1.3,0.4) {full\\model};
+\node at (1.3,-0.5) {batch split; gradients averaged};
+\node[font=\sffamily\small\bfseries] at (6.4,1.4) {pipeline};
+\foreach \i/\l in {0/{blocks\\1--4},1/{blocks\\5--8},2/{blocks\\9--12}} \node[gpu,fill=bda] (p\i) at (5.1+\i*1.3,0.4) {\l};
+\draw[->] (p0) -- (p1); \draw[->] (p1) -- (p2);
+\node at (6.4,-0.5) {layers split; GPUs wait};
+\node[font=\sffamily\small\bfseries] at (10.9,1.4) {tensor};
+\foreach \i in {0,1,2} \node[gpu,fill=bdg] at (9.6+\i*1.3,0.4) {$\frac13$ of\\each $W$};
+\node at (10.9,-0.5) {matrices split; much talk};
+\end{tikzpicture}
+\end{pic}
+Say: ``Data parallelism copies the model to go faster; pipeline and tensor parallelism cut the model up so it fits at all.''
+\end{sayit}
+
+\begin{sayit}[Board 13.5 · GELU against ReLU]
+\begin{pic}
+\begin{tikzpicture}[font=\sffamily\scriptsize,x=1cm,y=1cm]
+\draw[->,prec] (-3.2,0) -- (3.2,0) node[right] {$x$}; \draw[->,prec] (0,-0.6) -- (0,3.1);
+\draw[trapc,thick,dashed] (-3,0) -- (0,0) -- (3,3); \node[trapc,anchor=east] at (1.6,2.4) {ReLU};
+\draw[thmc,thick,domain=-3:3,samples=60] plot (\x,{\x*0.5*(1+tanh(0.7978845608*(\x+0.044715*\x*\x*\x)))});
+\node[thmc,anchor=west] at (2.2,1.6) {GELU};
+\fill[thmc] (1,0.841) circle (1.5pt); \node[anchor=west] at (1.05,0.7) {0.841};
+\fill[thmc] (-1,-0.159) circle (1.5pt); \node[anchor=north] at (-1,-0.2) {$-0.159$};
+\end{tikzpicture}
+\end{pic}
+Say: ``GELU is ReLU with the corner rounded off: a little negative output is allowed, and the gradient changes smoothly.''
+\end{sayit}
+
+\begin{sayit}[Board 13.6 · Sparse labels: an index, not a one-hot vector]
+\begin{pic}
+\begin{tikzpicture}[font=\sffamily\scriptsize]
+\node[anchor=east] at (1.6,0.5) {predicted}; \node[anchor=east] at (1.6,-0.1) {one-hot label}; \node[anchor=east] at (1.6,-0.7) {index label};
+\foreach \p/\y [count=\i from 0] in {0.10/0,0.70/1,0.15/0,0.05/0} {
+  \node[draw=prec!50,minimum width=9mm] at (2.2+\i*1.0,0.5) {\p};
+  \node[draw=prec!50,minimum width=9mm] at (2.2+\i*1.0,-0.1) {\y};}
+\node[draw=thmc,fill=thmc!30,minimum width=9mm] at (3.2,-0.1) {1};
+\node[draw=thmc,fill=thmc!30,minimum width=9mm] at (2.2,-0.7) {2};
+\node[anchor=west,font=\sffamily\small] at (6.4,-0.1) {$-\ln 0.70 = 0.357$ either way};
+\node[anchor=west] at (6.4,-0.7) {LLM: 1 number per position instead of 50,257};
+\end{tikzpicture}
+\end{pic}
+Say: ``Only the right class's probability survives the sum, so store the class index and skip the zeros.''
+\end{sayit}
+
+\begin{sayit}[Board 13.7 · Reading a loss value]
+\begin{pic}
+\begin{tikzpicture}[font=\sffamily\scriptsize,x=1.15cm]
+\draw[->,prec] (0,0) -- (11.5,0) node[right] {loss};
+\foreach \x in {0,2,4,6,8,10} \draw[prec] (\x,0.08) -- (\x,-0.08) node[below] {\x};
+\foreach \x/\l/\c/\h/\a in {10.82/{random, $V = 50{,}257$}/trapc/0.9/south,4.61/{random, $V = 100$}/exc/0.4/south west,3.92/{5-position example}/defc/0.9/south west,3/{loss of 3}/thmc/1.4/south} {\draw[\c,thick] (\x,0) -- (\x,\h); \node[\c,anchor=\a] at (\x,\h) {\l};}
+\end{tikzpicture}
+\end{pic}
+Say: ``Always compare a loss with $\ln V$. Three is excellent against 10.8 for GPT-2's vocabulary, and only modest against 4.6 for a 100-token one.''
+\end{sayit}
+
+\begin{sayit}[Board 13.8 · Gradient descent: step size matters]
+\begin{pic}
+\begin{tikzpicture}[>={Latex[length=2mm]},font=\sffamily\scriptsize,x=0.9cm,y=0.45cm]
+\draw[->,prec] (-0.5,0) -- (6.5,0) node[right] {$w$}; \draw[->,prec] (0,0) -- (0,9.5) node[above] {$L$};
+\draw[defc,thick,domain=-0.1:6.1,samples=50] plot (\x,{(\x-3)^2});
+\fill (5,4) circle (2pt) node[right] {start $w = 5$};
+\fill[thmc] (4.6,2.56) circle (2pt); \draw[->,thmc,thick] (5,4) -- (4.6,2.56); \node[thmc,anchor=north west] at (4.6,2.4) {$\eta = 0.1$: 4.6};
+\fill[trapc] (0.6,5.76) circle (2pt); \draw[->,trapc,thick] (5,4) to[bend right=25] (0.6,5.76); \node[trapc,anchor=west] at (0.6,8.4) {$\eta = 1.1$: $w = 0.6$, worse};
+\node[anchor=north] at (3,0) {minimum at 3};
+\end{tikzpicture}
+\end{pic}
+Say: ``Step against the slope, times the learning rate. Small steps go downhill; a step too big jumps across the valley and climbs.''
+\end{sayit}
+
+\begin{sayit}[Board 13.9 · Gradient accumulation]
+\begin{pic}
+\begin{tikzpicture}[>={Latex[length=2mm]},font=\sffamily\small,
+  box/.style={draw=#1L,fill=#1,rounded corners=2pt,align=center,minimum height=9mm,inner sep=3pt}]
+\node[box=bdq] (a) at (0,0.6) {micro-batch 1: 16};
+\node[box=bdq] (b) at (0,-0.6) {micro-batch 2: 16};
+\node[box=bdy] (g1) at (3.6,0.6) {gradients 1};
+\node[box=bdy] (g2) at (3.6,-0.6) {gradients 2};
+\node[box=bda] (s) at (6.8,0) {add, average};
+\node[box=bdg] (u) at (9.6,0) {one update\\(as if batch 32)};
+\draw[->] (a) -- (g1); \draw[->] (b) -- (g2); \draw[->] (g1) -- (s); \draw[->] (g2) -- (s); \draw[->] (s) -- (u);
+\end{tikzpicture}
+\end{pic}
+Say: ``Back-propagate several small batches, keep adding the gradients, update once. Big-batch behaviour, small-batch memory.''
+\end{sayit}
+
+\begin{sayit}[Board 13.10 · The learning-rate schedule]
+\begin{pic}
+\begin{tikzpicture}[font=\sffamily\scriptsize]
+\draw[->,prec] (0,0) -- (10,0) node[right] {step}; \draw[->,prec] (0,0) -- (0,2.4) node[above] {$\eta$};
+\draw[defc,thick] (0,0.05) -- (1.5,2) .. controls (4,2) and (6,0.6) .. (9.5,0.25);
+\draw[prec,dashed] (1.5,0) -- (1.5,2); \node[below] at (0.75,0) {warm-up};
+\node[anchor=west] at (4.5,1.6) {slow decay to settle};
+\end{tikzpicture}
+\end{pic}
+Say: ``Start gently while the weights are random, peak, then decay. Save a checkpoint every so often along the way.''
+\end{sayit}
+
+\begin{sayit}[Board 13.11 · Training uses every position; generation uses the last]
+\begin{pic}
+\begin{tikzpicture}[>={Latex[length=2mm]},font=\sffamily\small,
+  tok/.style={draw=#1L,fill=#1,rounded corners=1pt,minimum height=6mm,inner sep=3pt}]
+\node[anchor=east] at (-0.3,0.6) {training}; \node[anchor=east] at (-0.3,-0.6) {generation};
+\foreach \w [count=\i from 0] in {AI,stands,for} {\node[tok=bdq] (t\i) at (\i*1.5,0.6) {\w}; \node[tok=bdg,font=\sffamily\scriptsize] at (\i*1.5,1.5) {loss};\draw[->] (t\i) -- (\i*1.5,1.25);}
+\foreach \w [count=\i from 0] in {AI,stands,for} \node[tok=bdq] (g\i) at (\i*1.5,-0.6) {\w};
+\node[tok=bdy] (n) at (5.4,-0.6) {next: ``artificial''};
+\draw[->] (g2) -- (n);
+\node[anchor=west,font=\sffamily\scriptsize,text=prec] at (4.2,0.9) {every position predicts its next token};
+\end{tikzpicture}
+\end{pic}
+Say: ``In training every position is a question with a known answer. In generation only the last position matters: it has seen everything.''
+\end{sayit}
+
+%=====================================================================
+\section{How it works}
+\begin{enumerate}
+  \item Tokenize and cut the corpus into windows of $n_{\text{ctx}}$ with shifted labels; group into batches.
+  \item For each step: forward pass (embeddings, blocks with GELU in the feed-forward network, output layer, softmax function).
+  \item Sparse cross-entropy at every position, averaged.
+  \item Backward pass: gradients for all 124 million parameters (accumulated over micro-batches if needed).
+  \item AdamW update with the scheduled learning rate (warm-up, then decay); save checkpoints regularly.
+  \item Spread the work over GPUs with data, pipeline and tensor parallelism. Repeat for the planned number of steps.
+\end{enumerate}
+
+%=====================================================================
+\section*{Formula sheet}
+\addcontentsline{toc}{section}{Formula sheet}
+
+\begin{mastercard}[label=card:params]{Parameter count}
+Count the embedding table, the positional table and $L$ identical blocks of attention ($4d^2$) and feed-forward ($2\,d\,d_{\text{ff}}$); biases and norms ignored; output layer tied:
+\[
+\boxed{N = V d + n_{\text{ctx}}\, d + L\,(4d^2 + 2\,d\,d_{\text{ff}}) \qquad (d_{\text{ff}} = 4d \text{ in GPT-2, so } L \cdot 12 d^2).}
+\]
+\begin{plugrows}
+  \plugrow{Embedding table only}{\pstep{Box: first term $Vd$.}\pstep{From the model: $V = 50{,}257$, $d = 768$.}}{$Vd$}{tokens looked up by ID}{$50{,}257 \times 768 = 38{,}597{,}376$}
+  \plugrow{Learned positions}{\pstep{Box: second term $n_{\text{ctx}} d$.}\pstep{$n_{\text{ctx}} = 1{,}024$.}}{$n_{\text{ctx}} d$}{positions learned, not fixed}{$1{,}024 \times 768 = 786{,}432$}
+  \plugrow{One attention layer}{\pstep{Box: $4d^2$, from $W^Q, W^K, W^V, W^O$, each $d \times d$.}}{$4d^2$}{any number of heads ($h$ heads of $d/h$ still total $d \times d$)}{$4 \times 768^2 = 2{,}359{,}296$}
+  \plugrow{One feed-forward network}{\pstep{Box: $2\,d\,d_{\text{ff}}$.}\pstep{GPT-2: $d_{\text{ff}} = 4d$, so $8d^2$.}}{$8d^2$}{$d \to 4d \to d$}{$8 \times 768^2 = 4{,}718{,}592$}
+  \plugrow{Whole GPT-2 small}{\pstep{Box with $d_{\text{ff}} = 4d$: $Vd + n_{\text{ctx}}d + L \cdot 12d^2$.}\pstep{$12d^2 = 7{,}077{,}888$ per block, $L = 12$.}\pstep{Add.}}{$\approx 124$ million}{tied output layer}{$38{,}597{,}376 + 786{,}432 + 84{,}934{,}656 = 124{,}318{,}464$}
+  \plugrow{Untied output layer}{\pstep{Box, plus one more $V \times d$ matrix for the output layer.}}{$N + Vd$}{output weights not shared}{$124{,}318{,}464 + 38{,}597{,}376 = 162{,}915{,}840$}
+\end{plugrows}
+\end{mastercard}
+
+\begin{mastercard}[label=card:steps]{Training steps}
+Each step eats $B$ windows of $n_{\text{ctx}}$ tokens, so a data set of $D$ tokens takes
+\[
+\boxed{S = \Big\lceil \frac{D}{B\, n_{\text{ctx}}} \Big\rceil \text{ steps per pass}, \qquad \text{tokens trained on} = S\, B\, n_{\text{ctx}}.}
+\]
+\begin{plugrows}
+  \plugrow{Windows from a short text (chapter 9)}{\pstep{Box with $B = 1$: steps $=$ windows.}\pstep{Each window also needs one label token past its end, so only $D - 1$ tokens can start inputs: use $D - 1$ and round down (no partial windows).}}{$\lfloor (D - 1)/n_{\text{ctx}} \rfloor$ windows}{windows end to end}{$D = 60$, $n_{\text{ctx}} = 10$: $\lfloor 59/10 \rfloor = 5$}
+  \plugrow{Batches of windows}{\pstep{Box with $D\!/n_{\text{ctx}}$ replaced by the window count.}\pstep{Round up: the last batch may be part-full.}}{$\lceil \text{windows}/B \rceil$}{last batch allowed to be smaller}{5 windows, $B = 2$: $\lceil 2.5 \rceil = 3$}
+  \plugrow{One pass over a corpus}{\pstep{Box: $S = D/(B\,n_{\text{ctx}})$.}\pstep{$D = 5 \times 10^7$, $B = 32$, $n_{\text{ctx}} = 1{,}024$: $B\,n_{\text{ctx}} = 32{,}768$.}}{$S \approx 1{,}526$}{each token used once}{$50{,}000{,}000/32{,}768 = 1{,}525.9 \to 1{,}526$}
+  \plugrow{Tokens trained on}{\pstep{Box, second part: $S\,B\,n_{\text{ctx}}$.}}{tokens processed}{counts repeats too}{$1{,}526 \times 32 \times 1{,}024 = 50{,}003{,}968 \approx 50$ million}
+  \plugrow{Gradient accumulation}{\pstep{Box with $B = $ micro-batch $\times$ accumulation steps.}}{same $S$ as the full batch}{gradients averaged before the update}{micro-batch 16, 2 accumulations: $B = 32$, still 1,526 steps}
+\end{plugrows}
+\end{mastercard}
+
+\begin{mastercard}[label=card:loss]{Next-token loss}
+The average, over the $n$ positions of a window, of minus the log of the probability the model gave the true next token $w_{t+1}$:
+\[
+\boxed{\mathcal L = -\frac1n \sum_{t=1}^{n} \ln P\big(w_{t+1} \mid w_1, \dots, w_t\big).}
+\]
+\begin{plugrows}
+  \plugrow{One position (categorical $=$ sparse)}{\pstep{Box with $n = 1$: $-\ln P(\text{correct})$.}\pstep{With a one-hot label $y$: $-\sum_c y_c \ln p_c$ keeps only the correct class, the same number.}}{$-\ln p_{\text{correct}}$}{exactly one correct class}{$p = (0.10, 0.70, 0.15, 0.05)$, class 2: $-\ln 0.70 = 0.357$}
+  \plugrow{A window of $n$ positions}{\pstep{Box: average the $n$ terms.}\pstep{Each term: $-\ln$ of that position's correct-token probability.}}{mean loss}{causal mask in place}{$0.01, 0.05, 0.02, 0.03, 0.01$: $(4.605 + 2.996 + 3.912 + 3.507 + 4.605)/5 = 3.92$}
+  \plugrow{Random guessing}{\pstep{Box with every $P = 1/V$.}\pstep{$-\ln(1/V) = \ln V$ at every position.}}{$\mathcal L = \ln V$}{uniform predictions (start of training)}{$\ln 50{,}257 = 10.82$; $\ln 100 = 4.61$}
+  \plugrow{From loss back to a probability}{\pstep{Box with all positions equal to $p$: $\mathcal L = -\ln p$.}\pstep{Solve: $p = e^{-\mathcal L}$, like choosing among $e^{\mathcal L}$ equal tokens.}}{$p = e^{-\mathcal L}$}{as a typical value}{$\mathcal L = 3$: $e^{-3} = 0.050$, about 1 in $e^3 = 20$}
+\end{plugrows}
+\end{mastercard}
+
+\begin{mastercard}[label=card:mem]{Training memory}
+Per parameter: its weight, its gradient and the optimizer's state, each $b$ bytes per number; plus the activations $A$:
+\[
+\boxed{M = N\,(b_{\text{w}} + b_{\text{g}} + b_{\text{opt}}) + A, \qquad \text{32-bit Adam: } 4 + 4 + 8 = 16 \text{ bytes per parameter}.}
+\]
+\begin{plugrows}
+  \plugrow{Just loading the weights}{\pstep{Box with no gradients, no optimizer, no activations: $b_{\text{g}} = b_{\text{opt}} = 0$, $A \approx 0$.}}{$M = 4N$ bytes}{32-bit, no training}{$N = 10^9$: $4$ GB. GPT-2 small: $124{,}318{,}464 \times 4 = 497{,}273{,}856$ B $\approx 0.50$ GB}
+  \plugrow{Training with Adam}{\pstep{Box: $b_{\text{w}} = b_{\text{g}} = 4$, $b_{\text{opt}} = 2 \times 4 = 8$.}\pstep{Activations from batch, context and depth.}}{$16N + A$}{32-bit Adam}{$N = 10^9$: $16$ GB $+$ $10$--$15$ GB $= 26$--$31 \approx 30$ GB}
+  \plugrow{Plain gradient descent}{\pstep{Box with $b_{\text{opt}} = 0$ (no moments kept).}}{$8N + A$}{no optimizer state}{$N = 10^9$: $8$ GB $+ A$}
+  \plugrow{Does it fit on one GPU?}{\pstep{Box with Adam: $16N + A$.}\pstep{Compare with 80 GB (H100).}}{fits if $16N + A \le 80$ GB}{otherwise use pipeline or tensor parallelism}{$N = 10^9$: $\approx 30$ GB, fits. $N = 10^{10}$: $16 \times 10^{10}$ B $= 160$ GB before activations, does not}
+\end{plugrows}
+\end{mastercard}
+
+\begin{intuition}
+Pretraining is one simple game, guess the next token, played trillions of times. Almost all the difficulty is engineering: enough memory for 16 bytes per weight plus activations, enough GPUs to share it, and an optimizer and schedule gentle enough to keep billions of weights moving the same way.
+\end{intuition}
+
+%=====================================================================
+\section{What they will ask}
+
+\begin{iq}[\core]{Count GPT-2 small's parameters.}
+Embeddings $Vd = 38.6$M, learned positions $1{,}024 \times 768 = 0.8$M, and per block $4d^2 = 2.36$M for attention plus $8d^2 = 4.72$M for the feed-forward network, 7.08M, times 12 is 84.9M. Total about 124M; the output layer is tied, so it adds nothing.
+\end{iq}
+
+\begin{iq}[\core]{How much memory to train a 1-billion-parameter model?}
+32-bit: 4 GB of weights, 4 GB of gradients, 8 GB of Adam state, so 16 bytes per parameter, 16 GB, plus 10--15 GB of activations: about 30 GB. Loading it alone is 4 GB.
+\end{iq}
+
+\begin{iq}[\core]{What loss is used and what is a good value?}
+Sparse categorical cross-entropy at every position: $-\ln$ of the probability given to the true next token, averaged. Compare with random guessing, $\ln V$: 10.82 for $V = 50{,}257$. A loss of 3 means about $e^{-3} = 0.05$ on the right token.
+\end{iq}
+
+\begin{iq}[\core]{Data against model parallelism?}
+Data parallelism copies the full model to each GPU and splits the batch, averaging gradients: faster, but the model must fit on one GPU. Pipeline parallelism splits layers across GPUs (idle waiting); tensor parallelism splits each matrix product (heavy communication). Large runs combine all three.
+\end{iq}
+
+\begin{iq}[\core]{Why Adam rather than plain gradient descent?}
+Gradient descent is sensitive to the learning rate and can stall in local minima. Adam keeps moving averages of gradients (momentum) and squared gradients (per-parameter step sizes), so it steps steadily and adaptively. The cost is two extra numbers per parameter.
+\end{iq}
+
+\begin{iq}{How many training steps for 50 million tokens?}
+Tokens per step $= B \times n_{\text{ctx}} = 32 \times 1{,}024 = 32{,}768$; $50{,}000{,}000 / 32{,}768 \approx 1{,}526$ steps for one pass.
+\end{iq}
+
+\begin{iq}{What is gradient accumulation for?}
+Simulating a large batch when it won't fit: run micro-batches, add their gradients without updating, then average and update once. Two micro-batches of 16 act like one of 32.
+\end{iq}
+
+\begin{iq}{Why warm up the learning rate?}
+Early on the weights are random and gradients are large and erratic; big steps would throw training off. Raising the rate gradually, then decaying it, keeps training stable.
+\end{iq}
+
+\begin{iq}{Why only the last position when generating?}
+During training every position has a label. During generation we want the token after the prompt, and only the last position has attended to the whole prompt.
+\end{iq}

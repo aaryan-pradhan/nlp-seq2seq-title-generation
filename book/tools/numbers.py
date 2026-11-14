@@ -103,4 +103,24 @@ K8 = renorm(P8[:5]); assert [r(x, 3) for x in K8] == [0.486, 0.260, 0.139, 0.075
 assert topp(K8, 0.9) == [0.486, 0.746, 0.886, 0.960]
 assert [r(x, 3) for x in renorm(K8[:4])] == [0.506, 0.271, 0.145, 0.078]
 
+# ch 13: parameter count, steps, loss, GELU, gradient descent, memory
+from math import log, erf
+V, d, nctx, L = 50257, 768, 1024, 12
+assert V * d == 38597376 and nctx * d == 786432 and 4 * d * d == 2359296 and 8 * d * d == 4718592
+assert 12 * d * d == 7077888 and L * 12 * d * d == 84934656
+N = V * d + nctx * d + L * 12 * d * d; assert N == 124318464 and N + V * d == 162915840
+assert 1024 * 32 == 32768 and r(50e6 / 32768, 1) == 1525.9 and 1526 * 32 * 1024 == 50003968
+assert (60 - 1) // 10 == 5 and -(-5 // 2) == 3 and 16 * 2 == 32
+assert r(-log(0.70), 3) == 0.357
+ls = [-log(q) for q in (0.01, 0.05, 0.02, 0.03, 0.01)]
+assert [r(x, 3) for x in ls] == [4.605, 2.996, 3.912, 3.507, 4.605] and r(sum(r(x, 3) for x in ls), 3) == 19.625 and r(sum(ls) / 5, 2) == 3.92
+assert r(log(V), 2) == 10.82 and r(log(100), 2) == 4.61 and r(exp(-3), 3) == 0.050 and round(exp(3)) == 20
+Phi = lambda x: 0.5 * (1 + erf(x / sqrt(2)))
+assert r(Phi(1), 3) == 0.841 and r(Phi(-1), 3) == 0.159
+w0 = 5; g = 2 * (w0 - 3); assert g == 4 and (w0 - 3) ** 2 == 4
+assert r(w0 - 0.1 * g, 2) == 4.6 and r((w0 - 0.1 * g - 3) ** 2, 2) == 2.56
+assert r(w0 - 1.1 * g, 2) == 0.6 and r((w0 - 1.1 * g - 3) ** 2, 2) == 5.76
+assert 10**9 * 4 == 4e9 and 4 + 4 + 8 == 16 and 16 + 10 == 26 and 16 + 15 == 31
+assert N * 4 == 497273856 and r(N * 4 / 1e9, 2) == 0.50 and 16 * 10**10 == 160e9
+
 print('verify: ok')
