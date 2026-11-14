@@ -1,0 +1,181 @@
+\chapter{The objective line}
+\label{ch:objective}
+
+\begin{cvline}
+\textbf{Wiki-Title-Gen: Neural Text Summarization | Transformers \& LLMs} \hfill [Mar 25 -- Apr 25]\\
+Objective: Built an end-to-end abstractive text summarizer, evaluating PyTorch GRU baselines, T5 fine-tuning, and Flan-T5 prompting
+\end{cvline}
+
+%=====================================================================
+\section{Words you need}
+
+\subsection*{The task}
+
+\begin{definition}[Summarization: extractive and abstractive]
+\dfn{Summarization}: Turning a long text into a short one that keeps its meaning. \dfn{Extractive summarization} copies the most important sentences or words as they are. \dfn{Abstractive summarization} writes new text, possibly using words that never appear in the input, as a person would.
+\end{definition}
+
+\begin{definition}[Title generation]
+\dfn{Title generation}: The most extreme summary: a whole Wikipedia article in, its title out, usually two to five words. The model has to find the one thing the article is about, often a name, and say it.
+\end{definition}
+
+\begin{definition}[Token, sequence]
+A \dfn{token} is one unit of text the model reads or writes: a word, or a piece of a word. A \dfn{sequence} is an ordered list of tokens. An article is a long sequence; its title is a short one.
+\end{definition}
+
+\begin{definition}[Sequence-to-sequence model: encoder and decoder]
+A \dfn{sequence-to-sequence model} maps one sequence to another of a different length. It has two halves. The \dfn{encoder} reads the input and turns it into numbers that capture its meaning. The \dfn{decoder} writes the output one token at a time, each time using the encoder's numbers and the tokens it has written so far.
+\end{definition}
+
+\begin{definition}[End-to-end, PyTorch]
+\dfn{End-to-end}: Every step is built and run: cleaning the data, training, generating titles and scoring them. \dfn{PyTorch}: The Python library used to build and train neural networks; it computes all the derivatives needed for training automatically.
+\end{definition}
+
+\subsection*{The three model families}
+
+\begin{definition}[GRU, Transformer]
+A \dfn{GRU} (gated recurrent unit) is a neural network that reads a sequence one token at a time, keeping a running memory vector. A \dfn{Transformer} reads all tokens at once and lets every token look at every other one. Chapters 4 and 5 give the maths.
+\end{definition}
+
+\begin{definition}[Pretraining, fine-tuning, prompting]
+\dfn{Pretraining}: Training a big model on a huge amount of general text before it ever sees your task. \dfn{Fine-tuning}: Training a pretrained model a little more on your own task's examples. \dfn{Prompting}: Using a model with no extra training at all, just by writing an instruction in front of the input.
+\end{definition}
+
+\begin{definition}[T5, Flan-T5, baseline]
+\dfn{T5} is a pretrained Transformer from Google that treats every task as ``text in, text out''; T5-small has about 60 million weights. \dfn{Flan-T5} is T5 further trained to follow written instructions. A \dfn{baseline} is the simple model anything fancier must beat; here the GRUs.
+\end{definition}
+
+\subsection*{How the titles are scored}
+
+\begin{definition}[Precision, recall, F-measure]
+Compare a generated title with the true one. \dfn{Precision}: of the units the model wrote, the fraction that are in the true title. \dfn{Recall}: of the units in the true title, the fraction the model wrote. The \dfn{F-measure} combines them, $F = \dfrac{2PR}{P + R}$, and is high only when both are.
+\end{definition}
+
+\begin{definition}[ROUGE-1, ROUGE-2, ROUGE-L]
+\dfn{ROUGE} scores a generated text by its overlap with the true title. The ``unit'' changes:
+\begin{itemize}
+  \item \textbf{ROUGE-1}: single words;
+  \item \textbf{ROUGE-2}: pairs of neighbouring words (bigrams);
+  \item \textbf{ROUGE-L}: the longest common subsequence, the longest list of words that appears in both in the same order, not necessarily side by side.
+\end{itemize}
+The CV quotes the F-measure, averaged over the 100 test articles. 1 is a perfect match; 0 is no overlap.
+\end{definition}
+
+\begin{definition}[Reference, stemming]
+The \dfn{reference} is the true title a generated one is scored against. \dfn{Stemming} chops words to a rough root before comparing (``battles'' $\to$ ``battl''), so small differences in word form still count as matches. Both choices change the score.
+\end{definition}
+
+\begin{example}[Toy: scoring one title]
+Reference: ``battle of hastings''. Generated: ``the battle of hastings 1066''.
+\begin{steps}
+  \item ROUGE-1: 3 of the 5 generated words are in the reference, so $P = 3/5 = 0.6$; all 3 reference words were produced, so $R = 1$. $F = 2(0.6)(1)/1.6 = 0.75$.
+  \item ROUGE-2: generated bigrams are ``the battle'', ``battle of'', ``of hastings'', ``hastings 1066''; 2 of the 4 match the reference's 2 bigrams. $P = 0.5$, $R = 1$, $F = 0.667$.
+  \item ROUGE-L: the longest common subsequence is ``battle of hastings'', length 3: the same as ROUGE-1 here, $0.75$.
+\end{steps}
+\end{example}
+
+\begin{example}[Toy: where ROUGE-L and ROUGE-1 differ]
+Reference ``battle of hastings'', generated ``hastings battle of''.
+\begin{steps}
+  \item ROUGE-1: all 3 words match in both directions: $F = 1$.
+  \item ROUGE-L: the longest list in the same order is ``battle of'', length 2. $P = R = 2/3$, so $F = 0.667$. Word order is punished.
+\end{steps}
+\end{example}
+
+\begin{sayit}[Say it in 20 seconds]
+For my NLP course I built a full summarizer that writes a Wikipedia article's title from its text, and used it to compare three families: GRU encoder--decoders written from scratch in PyTorch, T5 fine-tuned on the task, and Flan-T5 used with prompts only. Everything was scored with ROUGE on the same 100 test articles.
+\end{sayit}
+
+%=====================================================================
+\section{The picture}
+
+\begin{sayit}[Board A · The task: article in, title out]
+\begin{pic}
+\begin{tikzpicture}[>={Latex[length=2mm]},font=\sffamily\small,
+  box/.style={draw=#1L,fill=#1,rounded corners=2pt,align=left,minimum height=9mm,inner sep=4pt}]
+\node[box=bdq,text width=55mm] (a) at (0,0) {``The Battle of Hastings was fought on 14 October 1066 between the Norman-French army of William, the Duke of Normandy, and an English army under \dots'' (hundreds of words)};
+\node[box=bdv,align=center] (m) at (5.2,0) {model};
+\node[box=bdg,align=center] (t) at (8.4,0) {``battle of\\hastings''};
+\draw[->] (a) -- (m); \draw[->] (m) -- (t);
+\end{tikzpicture}
+\end{pic}
+Say: ``Hundreds of words in, three out. Abstractive: the model writes the title, it doesn't just copy a sentence.''
+\end{sayit}
+
+\begin{sayit}[Board B · Encoder and decoder]
+\begin{pic}
+\begin{tikzpicture}[>={Latex[length=2mm]},font=\sffamily\small,
+  box/.style={draw=#1L,fill=#1,rounded corners=2pt,align=center,minimum height=9mm,inner sep=3pt}]
+\foreach \w [count=\i from 0] in {the,battle,of,\dots} {\node[box=bdq] (x\i) at (\i*1.3,0) {\w};}
+\node[box=bda,minimum width=50mm] (enc) at (1.95,-1.5) {encoder: reads the article};
+\node[box=bdy] (h) at (5.6,-1.5) {meaning\\in numbers};
+\node[box=bdv,minimum width=34mm] (dec) at (9.3,-1.5) {decoder: writes};
+\foreach \w [count=\i from 0] in {battle,of,hastings} {\node[box=bdg] (y\i) at (7.9+\i*1.4,0) {\w};}
+\foreach \i in {0,...,3} \draw[->] (x\i) -- (x\i |- enc.north);
+\draw[->] (enc) -- (h); \draw[->] (h) -- (dec);
+\foreach \i in {0,1,2} \draw[->] (y\i |- dec.north) -- (y\i);
+\end{tikzpicture}
+\end{pic}
+Say: ``The encoder turns the article into numbers; the decoder writes the title one word at a time from those numbers and the words it has already written.''
+\end{sayit}
+
+\begin{sayit}[Board C · Three families, one test set]
+\begin{pic}
+\begin{tikzpicture}[font=\sffamily\small,
+  box/.style={draw=#1L,fill=#1,rounded corners=2pt,align=center,minimum height=12mm,inner sep=3pt,text width=32mm}]
+\node[box=bda] at (0,0) {\textbf{GRU from scratch}\\learns only from\\13.4k pairs};
+\node[box=bdv] at (4,0) {\textbf{T5-small}\\pretrained, then\\fine-tuned};
+\node[box=bdg] at (8,0) {\textbf{Flan-T5}\\pretrained +\\instructions, no training};
+\draw[->,thick,prec] (-1.6,-1.2) -- (9.6,-1.2) node[below left,font=\sffamily\scriptsize]{more outside knowledge, less task training};
+\end{tikzpicture}
+\end{pic}
+Say: ``Left to right, each model brings more knowledge from outside the task and needs less training on it. Same 100 test articles for all.''
+\end{sayit}
+
+\begin{sayit}[Board D · ROUGE in one picture]
+\begin{pic}
+\begin{tikzpicture}[font=\sffamily\small]
+\node[anchor=west] at (0,0.8) {reference:}; \node[anchor=west] at (0,0) {generated:};
+\foreach \w/\c [count=\i from 0] in {battle/thmc,of/thmc,hastings/thmc} {\node[draw=\c,fill=\c!15,rounded corners=1pt] at (2.6+\i*1.6,0.8) {\w};}
+\foreach \w/\c [count=\i from 0] in {the/trapc,battle/thmc,of/thmc,hastings/thmc,1066/trapc} {\node[draw=\c,fill=\c!15,rounded corners=1pt] at (2.2+\i*1.5,0) {\w};}
+\node[anchor=west,font=\sffamily\scriptsize] at (0,-0.8) {ROUGE-1: $P = 3/5$, $R = 3/3$, $F = 0.75$ $\cdot$ ROUGE-L: common in-order run ``battle of hastings'' $\to$ $0.75$};
+\end{tikzpicture}
+\end{pic}
+Say: ``ROUGE counts overlap with the true title. Precision punishes extra words, recall punishes missing ones; the F-measure balances them.''
+\end{sayit}
+
+%=====================================================================
+\section{How it works}
+\begin{enumerate}
+  \item Load about 13.9k training articles with their titles; keep the last 500 for validation (13.4k pairs to learn from); 100 articles for testing.
+  \item Clean the text for the GRU models; T5 and Flan-T5 read the raw text.
+  \item Train the GRU baselines, fine-tune T5-small, and prompt Flan-T5-base and -large.
+  \item Generate a title for each test article with every model and score it with ROUGE.
+\end{enumerate}
+
+%=====================================================================
+\section{What they will ask}
+
+\begin{iq}[\core]{Walk me through the project.}
+Wikipedia title generation as extreme summarization. Three families on the same 100 test articles: GRU encoder--decoders from scratch (0.25 ROUGE-L, 0.50 with pretrained word vectors), T5-small fine-tuned (0.86), and Flan-T5-large prompted with no training (0.87). Pretrained knowledge dominated; extra hand-built structure didn't help.
+\end{iq}
+
+\begin{iq}[\core]{Why is title generation a good test of summarization?}
+The compression is extreme: hundreds of words to a handful. The model has to find the article's subject, often a named entity, and the output is short enough to score cleanly. It exposes every core seq2seq difficulty: long inputs, squeezing meaning into numbers, decoding, and evaluation.
+\end{iq}
+
+\begin{iq}[\core]{What does ROUGE miss?}
+Meaning. It counts word overlap, so a correct paraphrase scores badly and a title with the right words in a silly order can score well on ROUGE-1. That's why ROUGE-L, which respects order, is a useful second view; semantic scores like BERTScore or human ratings would be the next step.
+\end{iq}
+
+\begin{iq}{Why build GRUs from scratch when Transformers exist?}
+The assignment required it, and it shows the problem Transformers solve first-hand: a GRU decoder sees the article only through one fixed vector. Building it also forced me to get the mechanics right: batching, training the decoder, generating text.
+\end{iq}
+
+\begin{bugfix}[Don't say]
+\begin{itemize}
+  \item ``It's extractive.'' It's abstractive: the model writes the title.
+  \item ``ROUGE measures quality.'' It measures word overlap with one reference.
+  \item ``T5-small beat Flan-T5-large.'' Flan-T5-large is 0.87, T5-small 0.86 ROUGE-L.
+\end{itemize}
+\end{bugfix}

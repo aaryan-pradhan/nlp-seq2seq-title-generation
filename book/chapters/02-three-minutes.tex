@@ -1,0 +1,62 @@
+\chapter{The 3-minute version}
+\label{ch:three}
+
+Four beats: Why, What, How, What now. Draw Board 1 during How. Every word used here is explained in plain language in the next four chapters.
+
+\begin{sayit}[Why ($\sim$35 s)]
+Title generation is extreme summarization: given a whole Wikipedia article, produce the few words that name it. That makes it a clean way to study sequence-to-sequence models. The input is long, the output is tiny, and the model has to find the one thing the article is about. It was my NLP course assignment, and what I wanted to learn was which choices actually matter: architecture, pretrained knowledge, decoding, or scale.
+\end{sayit}
+
+\begin{sayit}[What ($\sim$35 s)]
+I built an end-to-end abstractive summarizer and compared three families on the same 100 test articles, scored with ROUGE. First, GRU encoder--decoders written from scratch in PyTorch: a bidirectional encoder, then GloVe-300d embeddings, a hierarchical encoder, a two-layer decoder and beam search. Second, T5-small fine-tuned on 13.4k article--title pairs. Third, Flan-T5-base and Flan-T5-large prompted zero-shot with two different instructions.
+\end{sayit}
+
+\begin{sayit}[How ($\sim$70 s, draw Board 1)]
+Preprocessing used spaCy in batches: lemmatize, drop stopwords and punctuation. For the RNNs I built a vocabulary of words in at least 1\% of articles, trained with teacher forcing and a cross-entropy loss that ignores padding, and used Accelerate for mixed precision. For T5 I used Hugging Face's Seq2SeqTrainer, with beam search at generation.
+
+The results told a clear story. GloVe doubled the basic RNN, from 0.25 to 0.50 ROUGE-L, and extra structure on top didn't help. Fine-tuned T5-small reached 0.86, beating every RNN. Zero-shot Flan-T5-large reached 0.87, and the prompt wording alone moved it by 6.6\%. The RNN's decoder sees the article through one fixed vector; T5 attends to every word and arrives already trained on huge amounts of text.
+\end{sayit}
+
+\begin{sayit}[What now ($\sim$40 s)]
+I'm upfront about measurement. The RNN rows were scored against cleaned titles and the Transformer rows against raw ones, every number is one run on 100 articles, and a gap under about 0.01 is one article's worth. So I'd re-score everything with one function, run several seeds and report confidence intervals. I'd also fix two bugs I found later: the RNN never learned an end token, and beam search ranked raw scores instead of log-probabilities. Then I'd fine-tune Flan-T5 itself. Happy to go into any of the three models.
+\end{sayit}
+
+\section{Board 1: the whole system}
+The one drawing to make in every interview. Boxes first, then the numbered arrows while you speak.
+
+\begin{sayit}[Board 1 · One experiment, three model families]
+\begin{pic}
+\begin{tikzpicture}[>={Latex[length=2mm]},font=\sffamily\small,
+  box/.style={draw=#1L,fill=#1,rounded corners=2pt,align=center,minimum height=9mm,inner sep=3pt}]
+\node[box=bdn] (csv) at (0,0) {13.4k train pairs\\100 test articles};
+\node[box=bdy] (clean) at (3.6,1.6) {spaCy clean\\vocab $\ge$ 1\%};
+\node[box=bda] (rnn) at (7.4,1.6) {GRU enc--dec\\+ GloVe, beam};
+\node[box=bdv] (t5) at (7.4,0) {T5-small\\fine-tuned};
+\node[box=bdg] (flan) at (7.4,-1.6) {Flan-T5\\zero-shot, 2 prompts};
+\node[box=bdq] (rouge) at (11,0) {ROUGE on the\\same 100 articles};
+\draw[->] (csv) -- node[above left,font=\sffamily\scriptsize]{1} (clean);
+\draw[->] (clean) -- node[above,font=\sffamily\scriptsize]{2} (rnn);
+\draw[->] (csv) -- node[above,font=\sffamily\scriptsize]{3 raw text} (t5);
+\draw[->] (csv) -- node[below left,font=\sffamily\scriptsize]{4} (flan);
+\draw[->] (rnn) -- node[above right,font=\sffamily\scriptsize]{0.25--0.50} (rouge);
+\draw[->] (t5) -- node[above,font=\sffamily\scriptsize]{0.86} (rouge);
+\draw[->] (flan) -- node[below right,font=\sffamily\scriptsize]{0.87} (rouge);
+\end{tikzpicture}
+\end{pic}
+\begin{enumerate}
+  \item ``Articles are cleaned with spaCy, and a vocabulary is built from words in at least 1\% of them.''
+  \item ``GRU encoder--decoders, written from scratch, train on the cleaned pairs: 0.25 ROUGE-L, 0.50 with GloVe.''
+  \item ``T5-small takes the raw text and is fine-tuned: 0.86.''
+  \item ``Flan-T5 gets only an instruction, no training: 0.87 for the large model with the better prompt.''
+\end{enumerate}
+\end{sayit}
+
+\begin{sayit}[Numbers to have ready]
+\begin{itemize}
+  \item 13,879 training articles; 500 held out for validation $\to$ 13,379 $\approx$ 13.4k pairs; 100 test articles.
+  \item ROUGE-L: B1 0.247; + GloVe 0.499; later RNN changes 0.30--0.33; T5-small 0.863; Flan-T5-large 0.821 / 0.875.
+  \item Prompt lift: $(0.8745 - 0.8207)/0.8207 = 6.6\%$.
+  \item T5 training: 3 epochs, learning rate $2\times10^{-5}$, batch 8, input 512 tokens, title 64, beam 5.
+  \item RNN training: hidden size 300, Adam $10^{-3}$, 3 epochs, gradient clipping 1.0, fp16.
+\end{itemize}
+\end{sayit}

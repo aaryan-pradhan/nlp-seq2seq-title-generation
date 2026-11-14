@@ -1,0 +1,411 @@
+\chapter{How an LLM writes text}
+\label{ch:llm}
+
+\begin{question}
+How does a large language model write an answer, one piece at a time, and what training turns it from a text-completer into an assistant?
+\end{question}
+
+\begin{whatfor}
+This chapter is the map for the whole part. It places large language models inside AI, shows that they are the decoder half of a Transformer, and follows one prompt through the model: tokens in, a probability for every possible next token out, one token picked, repeat. Then it covers the three training stages (pretraining, supervised fine-tuning, preference alignment) and what happens between a user typing a question and the answer appearing. The later chapters open each box of the model in turn.
+\end{whatfor}
+
+\begin{prereq}
+From chapters 3 to 7: token, vocabulary, special tokens, the Transformer with its encoder and decoder, pretraining and fine-tuning. Maths: vectors, $e^x$, and conditional probability $P(A \mid B)$.
+\end{prereq}
+
+\begin{setup}
+\textbf{The system:} a GPT-style text generator, already trained.
+\textbf{The one thing traced:} the prompt ``The capital of France is'' becoming the next word, ``Paris''.
+\end{setup}
+
+%=====================================================================
+\section{Words you need}
+
+\subsection*{Where it sits}
+
+\begin{definition}[Large language model]
+A \dfn{large language model} (LLM) is a machine-learning model, with billions of weights, trained on a huge amount of text to read and write human-like language. It answers questions, writes code, summarises, and chats. ChatGPT, Gemini, Claude and DeepSeek are examples.
+\end{definition}
+
+\begin{recall}
+\textbf{Recall: the nest it sits in.} AI is the widest circle; it also holds robotics, expert systems and game-playing agents. Machine learning is one part of AI, with three kinds: supervised, unsupervised and reinforcement learning. Neural networks are one family of machine-learning models; deep learning uses deep ones (feed-forward, convolutional, recurrent, Transformer, generative adversarial). The Transformer is the one LLMs are built on.
+\end{recall}
+
+\begin{recall}
+\textbf{Recall: the Transformer.} It was built for translation. The encoder reads the English sentence and turns it into vectors (the context); the decoder reads that context and writes the French sentence. Its variants: an image version (ViT), the full encoder--decoder for text in, text out (T5), the encoder alone for understanding text (BERT), and the decoder alone for writing text (GPT).
+\end{recall}
+
+\begin{definition}[Decoder-only model]
+A \dfn{decoder-only model} keeps only the decoder of the Transformer and drops the encoder. It takes text in and writes the text that should come next. GPT and today's LLMs are decoder-only.
+\end{definition}
+
+\subsection*{How it writes}
+
+\begin{definition}[Next-token prediction]
+\dfn{Next-token prediction}: given the tokens so far, the model gives the probability of every token in its vocabulary being the next one. In symbols, with $w_1, w_2, \dots, w_{t-1}$ the tokens so far and $w_t$ the next one, it computes
+\[
+P(w_t \mid w_1, w_2, \dots, w_{t-1}),
+\]
+read ``the probability of $w_t$ given everything before it''. One number per vocabulary token; the numbers add up to 1.
+\end{definition}
+
+\begin{definition}[Autoregressive generation]
+\dfn{Autoregressive generation}: pick one next token from those probabilities, append it to the text, and predict again from the longer text. Each new token depends on all the tokens before it, including the ones the model wrote itself. Repeating this writes sentences, paragraphs and whole documents.
+\end{definition}
+
+\begin{example}[Writing a sentence one token at a time]
+Start from ``The''.
+\begin{steps}
+  \item Context ``The'' $\to$ the model picks ``cat''.
+  \item Context ``The cat'' $\to$ ``sat''.
+  \item Context ``The cat sat'' $\to$ ``on'', then ``a'', then ``mat''.
+\end{steps}
+Each step is the same model run on a context one token longer.
+\end{example}
+
+\subsection*{How it scores every token}
+
+\begin{definition}[Logits]
+The last layer of the model gives one raw score per token in the vocabulary. These scores are the \dfn{logits}: any real numbers, positive or negative, and the larger one means ``more likely next''. Write $z_i$ for the logit of token $i$.
+\end{definition}
+
+\begin{definition}[Softmax function]
+The \dfn{softmax function} turns logits into probabilities:
+\[
+p_i = \frac{e^{z_i}}{\sum_{j=1}^{V} e^{z_j}},
+\]
+where $V$ is the vocabulary size, $z_i$ is token $i$'s logit and $p_i$ its probability. Every $e^{z}$ is positive, and dividing by the total makes the $p_i$ add up to 1. A larger logit always gets a larger probability.
+\end{definition}
+
+\begin{example}[Softmax for ``The capital of France is'']
+Suppose only four tokens matter, with logits Paris $4$, Lyon $2$, the $1$, banana $-2$.
+\begin{steps}
+  \item Exponentials: $e^4 = 54.60$, $e^2 = 7.39$, $e^1 = 2.72$, $e^{-2} = 0.14$.
+  \item Total: $54.60 + 7.39 + 2.72 + 0.14 = 64.84$ (to two decimals, from unrounded terms).
+  \item Probabilities: Paris $54.60/64.84 = 0.842$, Lyon $0.114$, the $0.042$, banana $0.002$. They add to 1.
+  \item Pick from these: ``Paris'' is the likely choice, but not a certain one.
+\end{steps}
+\end{example}
+
+\subsection*{How it is trained}
+
+\begin{definition}[Base model]
+Pretraining on trillions of words (books, articles, newspapers, journals, web pages, code: terabytes of text) gives a \dfn{base model}, also called a foundation model. It is very good at continuing text, but it is only a text-completer, not yet an assistant.
+\end{definition}
+
+\begin{example}[A base model only continues text]
+Two prompts, one base model.
+\begin{itemize}
+  \item Prompt ``What is the capital of France'' $\to$ the likeliest next token is ``?'', because a question is usually followed by a question mark. That is a correct prediction, not an answer.
+  \item Prompt ``The capital of France is'' $\to$ ``Paris''. It looks like knowledge, but it is the same completion.
+\end{itemize}
+\end{example}
+
+\begin{definition}[Supervised fine-tuning]
+\dfn{Supervised fine-tuning} (SFT) is the second training stage: the base model is trained further, with the same next-token objective, on conversations written and labelled by people. It learns to follow instructions and to answer like an assistant. Such data sets often hold millions of examples.
+\end{definition}
+
+\begin{definition}[Prompt template]
+Each training conversation is laid out in a fixed pattern, the \dfn{prompt template}, with special tokens marking who speaks: \code{<SYSTEM>} (standing instructions, such as ``You are a helpful AI assistant''), \code{<USER>} (the question) and \code{<ASSISTANT>} (the answer). The exact tokens differ between model makers; the idea is the same.
+\end{definition}
+
+\begin{definition}[End-of-sequence token]
+The \dfn{end-of-sequence token} \code{<EOS>} is a special token placed after every answer in the training data. A model on its own never knows when to stop; having seen \code{<EOS>} at the end of every answer, it learns to write \code{<EOS>} when its answer is complete.
+\end{definition}
+
+\begin{example}[Fine-tuning for a purpose]
+The data set decides the behaviour.
+\begin{itemize}
+  \item A style: system line ``Answer like a pirate'', user ``How do you deal with danger?'', and a reply written in a pirate's voice.
+  \item Reasoning: system line ``Think step by step before answering'', user ``Solve $3x + 5 = 20$'', reply ``Subtract 5: $3x = 15$. Divide by 3: $x = 5$.''
+\end{itemize}
+Fine-tuning can be repeated, one round per new use.
+\end{example}
+
+\begin{definition}[Preference alignment, reward model]
+Some models go through a third stage, \dfn{preference alignment}: their answers are pushed towards the ones people prefer. A \dfn{reward model} scores each answer, for example 4 out of 5 for a correct, polite, relevant one and 1 out of 5 for a poor one. The LLM is trained to earn high scores. When the preferences come from human feedback this is called RLHF.
+\end{definition}
+
+\begin{sayit}[Say it in 20 seconds]
+An LLM is a decoder-only Transformer that does one thing: given the text so far, it gives a probability for every possible next token. Pick one, append it, repeat until it writes an end token or hits a length limit. Pretraining on trillions of words makes a base model that completes text; supervised fine-tuning on templated conversations makes it an assistant; preference alignment with a reward model makes its answers the kind people prefer.
+\end{sayit}
+
+%=====================================================================
+\section{The picture}
+
+\begin{sayit}[Board 8.1 · Where an LLM sits]
+\begin{pic}
+\begin{tikzpicture}[font=\sffamily\small]
+\draw[draw=bdqL,fill=bdq] (0,0) circle (3.2);
+\draw[draw=bdaL,fill=bda] (0,-0.55) circle (2.5);
+\draw[draw=bdvL,fill=bdv] (0,-1.1) circle (1.8);
+\draw[draw=bdyL,fill=bdy] (0,-1.65) circle (1.1);
+\draw[draw=bdgL,fill=bdg] (0,-2.15) circle (0.45);
+\node at (0,2.6) {AI}; \node at (0,1.35) {machine learning}; \node at (0,0.1) {deep learning};
+\node at (0,-1.1) {Transformer}; \node at (0,-2.15) {GPT};
+\node[anchor=west,align=left,font=\sffamily\scriptsize] at (3.6,1.6) {AI also holds: robotics,\\expert systems, game agents};
+\node[anchor=west,align=left,font=\sffamily\scriptsize] at (3.6,0.4) {ML: supervised, unsupervised,\\reinforcement learning};
+\node[anchor=west,align=left,font=\sffamily\scriptsize] at (3.6,-0.8) {deep nets: feed-forward, CNN,\\RNN, Transformer, GAN};
+\node[anchor=west,align=left,font=\sffamily\scriptsize] at (3.6,-2.0) {Transformers: ViT, T5,\\BERT, GPT};
+\end{tikzpicture}
+\end{pic}
+Say: ``An LLM is a deep-learning model; deep learning is part of machine learning, which is part of AI. The architecture underneath is the Transformer.''
+\end{sayit}
+
+\begin{sayit}[Board 8.2 · Encoder--decoder, then decoder only]
+\begin{pic}
+\begin{tikzpicture}[>={Latex[length=2mm]},font=\sffamily\small,
+  box/.style={draw=#1L,fill=#1,rounded corners=2pt,align=center,minimum height=9mm,inner sep=3pt,minimum width=18mm}]
+\node[font=\sffamily\small\bfseries] at (2.6,1.2) {Translation (original)};
+\node[box=bdq] (in) at (0,0) {``How are\\you?''};
+\node[box=bda] (enc) at (2.6,0) {encoder};
+\node[box=bdv] (dec) at (5.2,0) {decoder};
+\node[box=bdg] (out) at (2.6,-1.5) {``Comment\\allez-vous ?''};
+\draw[->] (in) -- (enc); \draw[->] (enc) -- node[above,font=\sffamily\scriptsize]{context} (dec); \draw[->] (dec) |- (out);
+\node[font=\sffamily\small\bfseries] at (10,1.2) {GPT-style LLM};
+\node[box=bdq] (p) at (8.4,0) {text so far};
+\node[box=bdv] (d2) at (11.4,0) {decoder};
+\node[box=bdg] (n) at (11.4,-1.5) {next token};
+\draw[->] (p) -- (d2); \draw[->] (d2) -- (n); \draw[->] (n) -| (p);
+\end{tikzpicture}
+\end{pic}
+Say: ``The original Transformer had an encoder to read and a decoder to write. GPT kept only the decoder: it reads the text so far and writes what comes next.''
+\end{sayit}
+
+\begin{sayit}[Board 8.3 · The autoregressive loop]
+\begin{pic}
+\begin{tikzpicture}[>={Latex[length=2mm]},font=\sffamily\small,
+  tok/.style={draw=bdqL,fill=bdq,rounded corners=1pt,inner sep=2pt,minimum height=5mm},
+  new/.style={draw=bdgL,fill=bdg,rounded corners=1pt,inner sep=2pt,minimum height=5mm}]
+\foreach \row/\ctx/\nxt in {0/{The}/cat,1/{The,cat}/sat,2/{The,cat,sat}/on,3/{The,cat,sat,on}/a,4/{The,cat,sat,on,a}/mat} {
+  \foreach \w [count=\i from 0] in \ctx {\node[tok] at (\i*1.15,-\row*0.75) {\w};}
+  \node[draw=bdvL,fill=bdv,rounded corners=2pt,font=\sffamily\scriptsize] (m\row) at (6.6,-\row*0.75) {LLM};
+  \draw[->,prec] (\row*1.15+0.5,-\row*0.75) -- (m\row);
+  \node[new] (n\row) at (8.2,-\row*0.75) {\nxt};
+  \draw[->] (m\row) -- (n\row);}
+\end{tikzpicture}
+\end{pic}
+Say: ``Same model every row. Its output is appended to the input, and the longer text goes back in. That is all `autoregressive' means.''
+\end{sayit}
+
+\begin{sayit}[Board 8.4 · Inside the decoder, one prompt traced]
+\begin{pic}
+\begin{tikzpicture}[>={Latex[length=2mm]},font=\sffamily\small,
+  box/.style={draw=#1L,fill=#1,rounded corners=2pt,align=center,minimum height=7mm,inner sep=3pt,minimum width=30mm}]
+\node[box=bdq] (t) at (0,0) {``The capital of France is''};
+\node[box=bdq] (tok) at (0,1.1) {tokens};
+\node[box=bdv] (emb) at (0,2.2) {embedding};
+\node[draw=prec,dashed,rounded corners=4pt,minimum width=42mm,minimum height=26mm] (stack) at (0,4.05) {};
+\node[box=bda] (att) at (0,3.3) {attention};
+\node[box=bdg] (ff) at (0,4.5) {feed-forward};
+\node[anchor=west,font=\sffamily\scriptsize,text=prec] at (2.2,4.9) {$\times N$ blocks};
+\node[box=bdy] (lin) at (0,6.0) {linear: one logit per token};
+\node[box=bdy] (sm) at (0,7.1) {softmax: probabilities};
+\draw[->] (t) -- (tok); \draw[->] (tok) -- (emb); \draw[->] (emb) -- (att); \draw[->] (att) -- (ff); \draw[->] (ff) -- (lin); \draw[->] (lin) -- (sm);
+\foreach \n/\v/\y in {Paris/0.842/7.4,Lyon/0.114/6.8,the/0.042/6.2,banana/0.002/5.6} {
+  \node[anchor=east,font=\sffamily\scriptsize] at (4.6,\y) {\n};
+  \fill[thmc!40,draw=thmc] (4.7,\y-0.18) rectangle (4.7+4*\v,\y+0.18);
+  \node[anchor=west,font=\sffamily\scriptsize] at (4.75+4*\v,\y) {\v};}
+\node[draw=bdgL,fill=bdg,rounded corners=2pt] (paris) at (6.5,4.6) {pick: ``Paris''};
+\draw[->] (sm.east) -- (3.6,7.1);
+\draw[->] (6.5,5.3) -- (paris);
+\end{tikzpicture}
+\end{pic}
+Say: ``Text becomes tokens, tokens become vectors, a stack of attention and feed-forward blocks mixes them, a linear layer scores every vocabulary token, softmax makes those scores probabilities, and one token is picked.''
+\end{sayit}
+
+\begin{sayit}[Board 8.5 · Softmax: logits to probabilities]
+\begin{pic}
+\begin{tikzpicture}[font=\sffamily\small]
+\node[font=\sffamily\small\bfseries] at (2.3,2.6) {logits $z_i$};
+\node[font=\sffamily\small\bfseries] at (9.3,2.6) {probabilities $p_i = e^{z_i}/\sum_j e^{z_j}$};
+\draw[prec] (0,0) -- (4.6,0);
+\foreach \n/\z [count=\i from 0] in {Paris/4,Lyon/2,the/1,banana/-2} {
+  \fill[defc!35,draw=defc] (0.3+\i*1.1,0) rectangle (1.0+\i*1.1,0.45*\z);
+  \node[font=\sffamily\scriptsize] at (0.65+\i*1.1,{\z<0 ? 0.45*\z-0.25 : 0.45*\z+0.25}) {$\z$};
+  \node[font=\sffamily\scriptsize,anchor=north] at (0.65+\i*1.1,-1.15) {\n};}
+\draw[->,thick,prec] (5.0,0.9) -- node[above,font=\sffamily\scriptsize]{softmax} (6.4,0.9);
+\draw[prec] (6.8,0) -- (11.6,0);
+\foreach \n/\p [count=\i from 0] in {Paris/0.842,Lyon/0.114,the/0.042,banana/0.002} {
+  \fill[thmc!40,draw=thmc] (7.1+\i*1.1,0) rectangle (7.8+\i*1.1,2.2*\p);
+  \node[font=\sffamily\scriptsize] at (7.45+\i*1.1,2.2*\p+0.25) {\p};
+  \node[font=\sffamily\scriptsize,anchor=north] at (7.45+\i*1.1,-1.15) {\n};}
+\end{tikzpicture}
+\end{pic}
+Say: ``Logits can be negative and add to anything. Exponentiate and divide by the total: now they are positive, add to 1, and keep the same order.''
+\end{sayit}
+
+\begin{sayit}[Board 8.6 · The three training stages]
+\begin{pic}
+\begin{tikzpicture}[>={Latex[length=2mm]},font=\sffamily\small,
+  box/.style={draw=#1L,fill=#1,rounded corners=2pt,align=center,minimum height=16mm,inner sep=3pt,text width=36mm}]
+\node[box=bdq] (a) at (0,0) {\textbf{1. Pretraining}\\trillions of words\\$\to$ base model};
+\node[box=bda] (b) at (4.8,0) {\textbf{2. Supervised fine-tuning}\\templated conversations\\$\to$ assistant};
+\node[box=bdg] (c) at (9.6,0) {\textbf{3. Preference alignment}\\reward model scores\\$\to$ preferred answers};
+\draw[->] (a) -- (b); \draw[->] (b) -- (c);
+\node[font=\sffamily\scriptsize,text=prec] at (0,-1.2) {completes text};
+\node[font=\sffamily\scriptsize,text=prec] at (4.8,-1.2) {follows instructions};
+\node[font=\sffamily\scriptsize,text=prec] at (9.6,-1.2) {optional; e.g.\ RLHF};
+\end{tikzpicture}
+\end{pic}
+Say: ``Every stage trains the same next-token predictor. What changes is the data: raw text, then human-written conversations, then human preferences.''
+\end{sayit}
+
+\begin{sayit}[Board 8.7 · Base model against fine-tuned model]
+\begin{pic}
+\begin{tikzpicture}[>={Latex[length=2mm]},font=\sffamily\small,
+  box/.style={draw=#1L,fill=#1,rounded corners=2pt,align=center,minimum height=8mm,inner sep=3pt}]
+\node[box=bdq,text width=50mm] (q1) at (0,0) {What is the capital of France};
+\node[box=bdv] (m1) at (4.6,0) {base model};
+\node[box=bdr] (o1) at (7.3,0) {``?''};
+\draw[->] (q1) -- (m1); \draw[->] (m1) -- (o1);
+\node[box=bdq,text width=50mm] (q2) at (0,-1.3) {The capital of France is};
+\node[box=bdv] (m2) at (4.6,-1.3) {base model};
+\node[box=bdg] (o2) at (7.3,-1.3) {``Paris''};
+\draw[->] (q2) -- (m2); \draw[->] (m2) -- (o2);
+\node[box=bdq,text width=50mm] (q3) at (0,-2.6) {What is the capital of France};
+\node[box=bda] (m3) at (4.6,-2.6) {fine-tuned};
+\node[box=bdg,text width=30mm] (o3) at (8.4,-2.6) {``The capital of France is Paris.''};
+\draw[->] (q3) -- (m3); \draw[->] (m3) -- (o3);
+\end{tikzpicture}
+\end{pic}
+Say: ``A base model only continues text, so a question gets a question mark. Fine-tuning on conversations is what makes it answer.''
+\end{sayit}
+
+\begin{sayit}[Board 8.8 · One fine-tuning example in its template]
+\begin{pic}
+\begin{tikzpicture}[font=\ttfamily\small]
+\node[draw=bdqL,fill=bdq,rounded corners=2pt,align=left,text width=72mm,inner sep=6pt] (d) at (0,0) {%
+{\color{defc}<SYSTEM>}\\You are a helpful AI assistant.\\
+{\color{defc}<USER>}\\What is the capital city of France?\\
+{\color{defc}<ASSISTANT>}\\The capital city of France is Paris.{\color{trapc}<EOS>}};
+\node[draw=bdaL,fill=bda,rounded corners=2pt,align=left,text width=45mm,inner sep=6pt] (t) at (7.0,0) {%
+{\color{defc}<SYSTEM>}\\\{system line\}\\{\color{defc}<USER>}\\\{user\_question\}\\{\color{defc}<ASSISTANT>}\\\{ai\_response\}};
+\node[font=\sffamily\scriptsize,anchor=south] at (d.north) {one training example};
+\node[font=\sffamily\scriptsize,anchor=south] at (t.north) {the template};
+\end{tikzpicture}
+\end{pic}
+Say: ``Every example has the same layout. Special tokens mark who is speaking, and EOS marks where the answer stops, so the model learns both how to answer and when to stop.''
+\end{sayit}
+
+\begin{sayit}[Board 8.9 · From the chat box to the answer]
+\begin{pic}
+\begin{tikzpicture}[>={Latex[length=2mm]},font=\sffamily\small,
+  box/.style={draw=#1L,fill=#1,rounded corners=2pt,align=center,minimum height=10mm,inner sep=3pt,text width=24mm}]
+\node[box=bdq] (u) at (0,0) {user types\\``Write Python to add two numbers''};
+\node[box=bdr] (c) at (3.3,0) {checks: spelling, language, is it allowed};
+\node[box=bda] (w) at (6.6,0) {wrapped in the template};
+\node[box=bdv] (m) at (9.9,0) {fine-tuned LLM};
+\node[box=bdg] (s) at (9.9,-2.2) {``Sure'' $\to$ shown at once};
+\node[box=bdy] (f) at (3.3,-2.2) {stop at EOS or the token limit; format the code};
+\draw[->] (u) -- (c); \draw[->] (c) -- (w); \draw[->] (w) -- (m); \draw[->] (m) -- (s);
+\draw[->] (s) -- node[above,font=\sffamily\scriptsize]{append, predict again} (f);
+\draw[->,thmc,densely dotted] (s.east) -- ++(0.7,0) |- (m.east);
+\end{tikzpicture}
+\end{pic}
+Say: ``The answer streams in word by word because that is how it is made: each token is shown as soon as it is picked, then fed back in.''
+\end{sayit}
+
+\begin{sayit}[Board 8.10 · The reward model's job]
+\begin{pic}
+\begin{tikzpicture}[>={Latex[length=2mm]},font=\sffamily\small,
+  box/.style={draw=#1L,fill=#1,rounded corners=2pt,align=center,minimum height=10mm,inner sep=3pt,text width=36mm}]
+\node[box=bdg] (r1) at (0,0) {answer 1: correct, polite, relevant};
+\node[box=bdr] (r2) at (0,-1.6) {answer 2: poor};
+\node[box=bdy,text width=22mm] (rm) at (4.5,-0.8) {reward model};
+\node[box=bdg,text width=16mm] (s1) at (8.3,0) {4 / 5};
+\node[box=bdr,text width=16mm] (s2) at (8.3,-1.6) {1 / 5};
+\draw[->] (r1) -- (rm); \draw[->] (r2) -- (rm); \draw[->] (rm) -- (s1); \draw[->] (rm) -- (s2);
+\node[font=\sffamily\scriptsize,text=prec,anchor=west,align=left] at (9.3,-0.8) {LLM trained to\\ score high};
+\end{tikzpicture}
+\end{pic}
+Say: ``A reward model turns `people prefer this answer' into a number, and the LLM is trained to make that number high.''
+\end{sayit}
+
+\begin{sayit}[Board 8.11 · The map of this part]
+\begin{pic}
+\begin{tikzpicture}[>={Latex[length=2mm]},font=\sffamily\small,
+  box/.style={draw=#1L,fill=#1,rounded corners=2pt,align=center,minimum height=7mm,inner sep=3pt,minimum width=30mm},
+  lab/.style={font=\sffamily\scriptsize,anchor=west,text=prec}]
+\node[box=bdq] (t) at (0,0) {text $\to$ tokens};
+\node[box=bdv] (e) at (0,1.1) {embedding};
+\node[box=bda] (a) at (0,2.2) {attention};
+\node[box=bdg] (f) at (0,3.3) {feed-forward, residuals};
+\node[box=bdy] (o) at (0,4.4) {linear + softmax};
+\node[box=bdy] (p) at (0,5.5) {pick the next token};
+\draw[->] (t) -- (e); \draw[->] (e) -- (a); \draw[->] (a) -- (f); \draw[->] (f) -- (o); \draw[->] (o) -- (p);
+\node[lab] at (2.0,0) {chapter 9: cleaning data, tokenization};
+\node[lab] at (2.0,1.1) {chapter 10: tokens become vectors};
+\node[lab] at (2.0,2.2) {chapter 11: attention, the whole block};
+\node[lab] at (2.0,3.3) {chapter 11 as well};
+\node[lab] at (2.0,4.4) {chapters 10--11: the output layer};
+\node[lab] at (2.0,5.5) {chapter 12: temperature, top-$k$, top-$p$};
+\node[lab] at (2.0,-1.0) {chapter 13: pretraining at scale; chapters 14--15: faster, smaller generation};
+\end{tikzpicture}
+\end{pic}
+Say: ``Each box of the model gets one chapter: data and tokens, embeddings, attention, then how the next token is picked, how it is all trained, and how generation is made cheap.''
+\end{sayit}
+
+%=====================================================================
+\section{How it works}
+
+The generation loop, as it runs once the user's question is in the template:
+\begin{lstlisting}[language=Python]
+tokens = template_tokens(question)      # system line, user question, <ASSISTANT>
+answer = []
+while True:
+    p = model(tokens)                   # one probability per vocabulary token
+    new = pick(p)                       # e.g. "Sure"
+    tokens.append(new)
+    answer.append(new)
+    stream_to_user(new)
+    if new == EOS or len(answer) == MAX_NEW_TOKENS:
+        break
+\end{lstlisting}
+\begin{enumerate}
+  \item The user's message may be checked first (spelling, language, whether it is allowed); then it is wrapped in the prompt template the model was fine-tuned with, leaving the assistant's part empty.
+  \item The model gives next-token probabilities; one token is picked (``Sure'') and sent to the screen at once.
+  \item The token is appended and the model runs again on the longer text.
+  \item It stops at \code{<EOS>} or at a set maximum number of new tokens. Then the answer is formatted, for example code shown in a code block.
+\end{enumerate}
+
+No formula sheet in this chapter: the softmax function becomes one row of the sampling card, beneath the chapter on picking the next token.
+
+\begin{intuition}
+An LLM is autocomplete trained on so much text that completing well means knowing things. Everything else is packaging: the template makes a question look like the start of a document whose natural continuation is a helpful answer, and \code{<EOS>} teaches it where that answer ends.
+\end{intuition}
+
+%=====================================================================
+\section{What they will ask}
+
+\begin{iq}[\core]{How does an LLM generate text?}
+It predicts a probability for every token in its vocabulary given the text so far, picks one, appends it, and repeats. It stops at the end-of-sequence token or a maximum length. Each step is a full run of the decoder on a context one token longer.
+\end{iq}
+
+\begin{iq}[\core]{Why is GPT called decoder-only?}
+The original Transformer had an encoder to read the source and a decoder to write the target, for translation. GPT keeps only the decoder: it reads text and writes the continuation, so no separate encoder is needed.
+\end{iq}
+
+\begin{iq}[\core]{What are logits, and what does softmax do?}
+Logits are the raw scores the last layer gives each vocabulary token. Softmax exponentiates them and divides by the total, so they become positive probabilities that add to 1, in the same order. Example: logits 4, 2, 1, $-2$ become 0.842, 0.114, 0.042, 0.002.
+\end{iq}
+
+\begin{iq}[\core]{What is the difference between a base model and ChatGPT-style assistants?}
+A base model is only pretrained: it continues text, so ``What is the capital of France'' gets ``?''. The assistant was also supervised-fine-tuned on templated conversations, and often preference-aligned with a reward model, so it answers instead.
+\end{iq}
+
+\begin{iq}{How does the model know when to stop?}
+It doesn't on its own. Every training answer ends in \code{<EOS>}, so the model learns to write \code{<EOS>} at the end of an answer, and the loop stops there. A maximum number of new tokens is the safety net.
+\end{iq}
+
+\begin{iq}{Why do chat answers appear word by word?}
+Because that is how they are made: one token per run of the model. Each token is shown as soon as it is picked; the streaming is the real process, not an animation.
+\end{iq}
+
+\begin{iq}{What is preference alignment?}
+A third, optional training stage. A reward model scores answers by how much people would prefer them (correct, polite, relevant high; poor low), and the LLM is trained towards high-scoring answers. RLHF is the version that learns the reward from human feedback.
+\end{iq}
+
+\begin{iq}{What is a prompt template?}
+The fixed layout every fine-tuning conversation uses, with special tokens such as \code{<SYSTEM>}, \code{<USER>}, \code{<ASSISTANT>} and \code{<EOS>}. At use time the user's question is wrapped in the same template, so the model continues in the assistant's role. Each model maker has its own.
+\end{iq}

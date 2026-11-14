@@ -1,0 +1,129 @@
+\chapter{Limits, and what next}
+\label{ch:limits}
+
+Interviewers like a candidate who knows where their own project stops. Raise these yourself, before they do.
+
+%=====================================================================
+\section{Words you need}
+
+\begin{definition}[Random seed]
+A \dfn{random seed} fixes the random choices in training: the starting weights, the batch order. A different seed gives a slightly different model and score. One run is one draw.
+\end{definition}
+
+\begin{definition}[Paired bootstrap]
+The \dfn{paired bootstrap} tests whether model A really beats model B on the same test set. Draw 100 articles at random \emph{with replacement} from the 100, compute $\text{score}_A - \text{score}_B$ on that draw, and repeat 1,000 times. If the middle 95\% of those differences excludes 0, the gap is real.
+\end{definition}
+
+\begin{example}[Toy: what one article is worth]
+ROUGE-L averages 100 per-article scores.
+\begin{steps}
+  \item One article going from 0 to 1 moves the average by $1/100 = 0.01$.
+  \item Flan-T5-large against T5-small: $0.012$, about one article. Can't call it.
+  \item T5-small against the best RNN: $0.364$, about 36 articles. Clearly real.
+\end{steps}
+\end{example}
+
+\begin{definition}[Ablation]
+An \dfn{ablation} measures one component by changing only it. Your RNN changes were \emph{cumulative}, each stacked on the last, so each row mixes several changes. One change at a time, over several seeds, isolates each.
+\end{definition}
+
+\begin{sayit}[Say it in 20 seconds]
+The biggest limit is measurement. The RNN rows were scored against cleaned titles, the Transformer rows against raw ones, with different stemming; every number is one run on 100 articles, so gaps under about 0.01 are one article. And I found three bugs afterwards: no end token in the RNN's training titles, beam search ranking raw scores, and T5's label padding not masked. None changes the main story, which is far bigger than the noise, but I'd fix them and re-score everything with one function.
+\end{sayit}
+
+%=====================================================================
+\section{The picture}
+
+\begin{sayit}[Board U · Not everything was measured the same way]
+\begin{pic}
+\begin{tikzpicture}[font=\sffamily\small,
+  box/.style={draw=#1L,fill=#1,rounded corners=2pt,align=left,minimum height=9mm,inner sep=4pt,text width=34mm}]
+\node[font=\sffamily\small\bfseries] at (0,1.4) {GRU rows};
+\node[box=bdr] at (0,0) {cleaned references\\stemming on\\outputs cut to the reference's length};
+\node[font=\sffamily\small\bfseries] at (4.4,1.4) {T5-small};
+\node[box=bdy] at (4.4,0) {raw references\\stemming on\\\phantom{x}};
+\node[font=\sffamily\small\bfseries] at (8.8,1.4) {Flan-T5};
+\node[box=bdg] at (8.8,0) {raw references\\no stemming\\\phantom{x}};
+\end{tikzpicture}
+\end{pic}
+Say: ``Three slightly different rulers. The fix is one scoring function, raw references, stemming on, used for every model.''
+\end{sayit}
+
+\begin{sayit}[Board V · The three bugs, and their fixes]
+\begin{pic}
+\begin{tikzpicture}[>={Latex[length=2mm]},font=\sffamily\small,
+  box/.style={draw=#1L,fill=#1,rounded corners=2pt,align=center,minimum height=9mm,inner sep=3pt,text width=44mm}]
+\node[box=bdr] (a) at (0,0) {RNN titles had no \code{<EOS>}: it never learned to stop};
+\node[box=bdg] (a2) at (6.4,0) {append \code{<EOS>}; stop on it; drop the length cut};
+\node[box=bdr] (b) at (0,-1.3) {beam search ranked raw scores};
+\node[box=bdg] (b2) at (6.4,-1.3) {sum log-softmax scores, normalise by length};
+\node[box=bdr] (c) at (0,-2.6) {T5 label padding counted in the loss};
+\node[box=bdg] (c2) at (6.4,-2.6) {set pads to $-100$ (\code{DataCollatorForSeq2Seq})};
+\draw[->] (a) -- (a2); \draw[->] (b) -- (b2); \draw[->] (c) -- (c2);
+\end{tikzpicture}
+\end{pic}
+Say: ``I found these auditing my own code. Owning them is better than being caught by them.''
+\end{sayit}
+
+\begin{sayit}[Board W · The paired bootstrap]
+\begin{pic}
+\begin{tikzpicture}[>={Latex[length=2mm]},font=\sffamily\small,
+  box/.style={draw=#1L,fill=#1,rounded corners=2pt,align=center,minimum height=9mm,inner sep=3pt}]
+\node[box=bdq] (a) at (0,0) {100 test articles,\\scores of A and B};
+\node[box=bdy] (b) at (3.8,0) {resample 100\\with replacement};
+\node[box=bda] (c) at (7.4,0) {A $-$ B on\\this sample};
+\node[box=bdg] (d) at (10.8,0) {middle 95\%\\excludes 0?};
+\draw[->] (a) -- (b); \draw[->] (b) -- (c); \draw[->] (c) -- (d);
+\draw[->,prec] (c.south) -- ++(0,-0.6) -| node[below,pos=0.25,font=\sffamily\scriptsize]{repeat 1,000 times} (b.south);
+\end{tikzpicture}
+\end{pic}
+Say: ``It needs per-article scores, which I didn't save. That's the first thing I'd change.''
+\end{sayit}
+
+%=====================================================================
+\section{What it does not show yet}
+\begin{itemize}
+  \item \textbf{One run each, 100 articles:} no error bars; gaps under about 0.01 are one article.
+  \item \textbf{Mixed scoring:} cleaned against raw references, stemming on and off.
+  \item \textbf{Cumulative RNN changes:} each component's own effect isn't isolated.
+  \item \textbf{No saved outputs:} the notebooks' outputs, weights and per-article scores weren't kept.
+  \item \textbf{ROUGE only:} no meaning-based score and no human judgement.
+\end{itemize}
+
+%=====================================================================
+\section{What they will ask}
+
+\begin{iq}[\core]{What's the weakest part of your evaluation?}
+Consistency. The RNNs were scored against cleaned titles with outputs cut to the reference's length, the Transformers against raw titles, and the two Transformer parts differed in stemming. Each row is one run on 100 articles. The big conclusions survive, since the gaps are tens of articles' worth, but I wouldn't rank models closer than about 0.01.
+\end{iq}
+
+\begin{iq}[\core]{What bugs did you find?}
+Three. The RNN's training titles had no end token, so it couldn't learn to stop. Beam search ranked candidates on raw scores instead of summed log-probabilities. And T5's padded label positions weren't masked, so the loss counted padding. Each has a one-line fix.
+\end{iq}
+
+\begin{iq}[\core]{What would you do next?}
+In order:
+\begin{enumerate}
+  \item one scoring function for every model, and save per-article scores;
+  \item fix the three bugs and re-run with 3 or more seeds, with paired-bootstrap intervals;
+  \item add attention to the RNN, the fair fix for its bottleneck;
+  \item fine-tune Flan-T5 with LoRA;
+  \item add a meaning-based score (BERTScore) and a small human check.
+\end{enumerate}
+\end{iq}
+
+\begin{iq}{How would you deploy a title generator?}
+Use Flan-T5-large zero-shot or the fine-tuned T5-small, depending on the latency budget, behind a small batched inference service on a GPU; evaluate on raw references with a human check; monitor output length and quality drift; and treat article text as untrusted input to the prompt.
+\end{iq}
+
+\begin{iq}{What did you learn?}
+Bring in outside knowledge before adding structure: GloVe helped, and pretrained Transformers helped far more, while hand-built additions didn't. And control the measurement before crediting the model: my biggest RNN jump coincided with an evaluation change.
+\end{iq}
+
+\begin{bugfix}[Don't say]
+\begin{itemize}
+  \item ``The results are statistically significant.'' No intervals were computed.
+  \item ``Beam search and the hierarchical encoder were tested fairly.'' Both had flaws.
+  \item ``The README is right that T5-small beats Flan-T5-large.'' Its own table, and your CV, say otherwise.
+\end{itemize}
+\end{bugfix}

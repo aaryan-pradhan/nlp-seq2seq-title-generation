@@ -1,0 +1,26 @@
+\chapter{The 30-second version}
+\label{ch:thirty}
+
+\begin{sayit}[Say this when they say ``tell me about this project'']
+For my NLP course, I built an abstractive summarizer that writes a Wikipedia article's title from its text, and compared three families of models on the same test set. First, GRU encoder--decoders I wrote from scratch in PyTorch, trained on 13.4k article--title pairs with GloVe embeddings, teacher forcing and beam search. Second, T5-small fine-tuned with Hugging Face's Seq2SeqTrainer, which reached 0.86 ROUGE-L and beat every RNN. Third, Flan-T5 with no training at all: Flan-T5-large reached 0.87 ROUGE-L, and just rewording the prompt lifted it 6.6\%. The lesson: pretrained knowledge and attention beat hand-built architecture.
+\end{sayit}
+
+\begin{sayit}[The four CV lines, and the numbers on each]
+\begin{itemize}
+  \item \textbf{Objective:} an end-to-end abstractive summarizer; three model families compared.
+  \item \textbf{Bullet 1:} bidirectional GRU encoder--decoder in PyTorch; GloVe-300d, beam search, teacher forcing; 13.4k pairs.
+  \item \textbf{Bullet 2:} T5-small fine-tuned with Seq2SeqTrainer on 13.4k pairs; 0.86 ROUGE-L, above every RNN.
+  \item \textbf{Bullet 3:} zero-shot Flan-T5; 0.87 ROUGE-L for Flan-T5-large; prompt wording gave a 6.6\% lift.
+\end{itemize}
+\end{sayit}
+
+\begin{sayit}[Memory cues]
+\begin{itemize}
+  \item Title generation $=$ extreme summarization: whole article in, a few words out.
+  \item 13,879 training articles, 500 held out $\to$ 13.4k pairs; 100 test articles.
+  \item ROUGE-L: basic RNN 0.25 $\to$ GloVe 0.50 $\to$ T5-small 0.86 $\to$ Flan-T5-large 0.87.
+  \item Prompt 1 $\to$ prompt 2: 0.821 $\to$ 0.875 ROUGE-L, $+6.6\%$ relative.
+  \item Why T5 wins: pretraining plus attention to every input word, against one fixed vector.
+  \item One test article $\approx 0.01$ of ROUGE: gaps smaller than that are noise.
+\end{itemize}
+\end{sayit}

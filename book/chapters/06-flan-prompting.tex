@@ -1,0 +1,164 @@
+\chapter{Bullet 3: zero-shot Flan-T5}
+\label{ch:flan}
+
+\begin{cvline}
+Benchmarked zero-shot Flan-T5 models, achieving 0.87 ROUGE-L on Flan-T5-large and demonstrating a 6.6\% lift via prompt syntax tuning
+\end{cvline}
+
+%=====================================================================
+\section{Words you need}
+
+\begin{definition}[Instruction tuning]
+\dfn{Instruction tuning}: After pretraining, train the model on very many tasks, each written as an instruction plus an answer (``Translate this to German: \dots''). The model learns to follow instructions it has never seen. Flan-T5 is T5 after instruction tuning on over a thousand tasks.
+\end{definition}
+
+\begin{definition}[Zero-shot]
+\dfn{Zero-shot}: Using a model on a task with no examples of that task and no extra training. Here Flan-T5 gets only an instruction and the article. Not one of the 13.4k pairs is used.
+\end{definition}
+
+\begin{definition}[Prompt syntax tuning]
+\dfn{Prompt syntax tuning}: Trying different wordings of the instruction and keeping the one that scores best. The model's weights never change; only the text in front of the article does. You tried two:
+\begin{enumerate}
+  \item ``Summarize the following text into a title: \{text\}''
+  \item ``Generate a headline for this article: \{text\}''
+\end{enumerate}
+\end{definition}
+
+\begin{definition}[Model size]
+\dfn{Model size} is the number of weights. Flan-T5-base has about 250 million; Flan-T5-large about 780 million, roughly 3 times as many and 13 times T5-small's 60 million.
+\end{definition}
+
+\begin{definition}[Relative lift]
+The \dfn{relative lift} from score $a$ to score $b$ is $(b - a)/a$: the gain as a fraction of where you started. It differs from the plain difference $b - a$.
+\end{definition}
+
+\begin{example}[Your 6.6\%]
+Flan-T5-large's ROUGE-L is 0.8207 with prompt 1 and 0.8745 with prompt 2.
+\begin{steps}
+  \item Plain difference: $0.8745 - 0.8207 = 0.0538$.
+  \item Relative lift: $0.0538 / 0.8207 = 0.0656 \approx 6.6\%$.
+\end{steps}
+\end{example}
+
+\begin{definition}[Resolution of a test set]
+The \dfn{resolution} is the smallest change a test set can show. ROUGE-L here is an average over 100 articles, each scoring between 0 and 1, so one article changing its score completely moves the average by $1/100 = 0.01$. Gaps much under 0.01 can't be told apart from noise.
+\end{definition}
+
+\begin{sayit}[Say it in 20 seconds]
+I also tried Flan-T5, an instruction-tuned T5, with no training at all, just an instruction in front of the article. Two sizes, base and large, and two prompt wordings. Flan-T5-large reached 0.87 ROUGE-L, level with fine-tuned T5-small. Rewording the prompt from ``summarize into a title'' to ``generate a headline'' lifted it from 0.82 to 0.87, a 6.6\% relative lift with zero training.
+\end{sayit}
+
+%=====================================================================
+\section{The picture}
+
+\begin{sayit}[Board Q · Fine-tuning against prompting]
+\begin{pic}
+\begin{tikzpicture}[>={Latex[length=2mm]},font=\sffamily\small,
+  box/.style={draw=#1L,fill=#1,rounded corners=2pt,align=center,minimum height=9mm,inner sep=3pt}]
+\node[font=\sffamily\small\bfseries] at (2.2,1.3) {T5-small: fine-tuned};
+\node[box=bdq] (a) at (0,0) {13.4k pairs};
+\node[box=bdv] (b) at (3.6,0) {weights change};
+\draw[->] (a) -- (b);
+\node[font=\sffamily\small\bfseries] at (8.6,1.3) {Flan-T5: zero-shot};
+\node[box=bdy] (c) at (7,0) {an instruction};
+\node[box=bdg] (d) at (10.4,0) {weights fixed};
+\draw[->] (c) -- (d);
+\node[font=\sffamily\scriptsize] at (2.2,-1) {0.86 ROUGE-L}; \node[font=\sffamily\scriptsize] at (8.6,-1) {0.87 ROUGE-L (large, prompt 2)};
+\end{tikzpicture}
+\end{pic}
+Say: ``One model learned the task from 13.4k examples; the other was only told what to do. They ended level.''
+\end{sayit}
+
+\begin{sayit}[Board R · The 2 $\times$ 2 grid (ROUGE-L)]
+\begin{pic}
+\begin{tikzpicture}[font=\sffamily\small]
+\node at (3,1.3) {prompt 1: ``summarize \dots into a title''}; \node at (8.6,1.3) {prompt 2: ``generate a headline''};
+\node[anchor=east] at (0.4,0.4) {Flan-T5-base}; \node[anchor=east] at (0.4,-0.8) {Flan-T5-large};
+\draw[fill=defc!20] (0.6,0) rectangle (5.4,0.8); \node at (3,0.4) {0.6808};
+\draw[fill=defc!12] (6.2,0) rectangle (11,0.8); \node at (8.6,0.4) {0.6317};
+\draw[fill=thmc!20] (0.6,-1.2) rectangle (5.4,-0.4); \node at (3,-0.8) {0.8207};
+\draw[fill=thmc!40] (6.2,-1.2) rectangle (11,-0.4); \node at (8.6,-0.8) {\textbf{0.8745}};
+\end{tikzpicture}
+\end{pic}
+Say: ``Size matters most: large beats base by 0.14 to 0.24. The prompt matters too, and the best wording isn't the same for both sizes.''
+\end{sayit}
+
+\begin{sayit}[Board S · Where the 6.6\% comes from]
+\begin{pic}
+\begin{tikzpicture}[font=\sffamily\small,x=11cm]
+\fill[thmc!20,draw=thmc] (0,0) rectangle (0.8207,0.5); \node[anchor=west] at (0.01,0.25) {large, prompt 1: 0.8207};
+\fill[thmc!45,draw=thmc] (0,-0.75) rectangle (0.8745,-0.25); \node[anchor=west] at (0.01,-0.5) {large, prompt 2: 0.8745};
+\draw[<->,trapc,thick] (0.8207,-0.9) -- (0.8745,-0.9);
+\node[text=trapc,anchor=north,font=\sffamily\scriptsize] at (0.8476,-0.95) {0.0538: $0.0538/0.8207 = 6.6\%$};
+\end{tikzpicture}
+\end{pic}
+Say: ``Same model, same weights; only the instruction changed. 0.054 on 0.821 is a 6.6\% relative lift: about five articles' worth.''
+\end{sayit}
+
+\begin{sayit}[Board T · Every model on one line (ROUGE-L)]
+\begin{pic}
+\begin{tikzpicture}[font=\sffamily\scriptsize,x=12cm]
+\draw[->] (0.2,0) -- (0.95,0);
+\foreach \x in {0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9} {\draw (\x,0.06) -- (\x,-0.06) node[below]{\x};}
+\foreach \v/\n/\c/\h/\a in {0.2469/basic GRU/prec/0.5/south,0.4985/GRU + GloVe/defc/0.5/south,0.6808/Flan-base/exc/0.5/south,0.8207/Flan-large p1/thmc/0.8/south east,0.8626/T5-small/trapc/1.3/south west,0.8745/Flan-large p2/thmc/1.9/south west} {
+  \draw[\c,thick] (\v,0) -- (\v,\h); \node[\c,anchor=\a] at (\v,\h) {\n};}
+\end{tikzpicture}
+\end{pic}
+Say: ``The three families sit in three bands: RNNs at 0.25--0.50, Transformers at 0.68--0.87. T5-small and Flan-T5-large are about one article apart.''
+\end{sayit}
+
+%=====================================================================
+\section{How it works}
+\begin{enumerate}
+  \item Load \code{google/flan-t5-base} and \code{google/flan-t5-large} with their pretrained weights; no training.
+  \item For each test article, put one of the two instructions in front of the raw text.
+  \item Generate with beam search (width 5, up to 50 tokens) and score with ROUGE. (These runs were on CPU, which is why they were slow.)
+  \item Compare the four combinations: 2 sizes $\times$ 2 prompts.
+\end{enumerate}
+
+%=====================================================================
+\section{The numbers: 0.87 and 6.6\%}
+
+\begin{measured}[The number]
+\begin{itemize}
+  \item \textbf{0.87 ROUGE-L:} Flan-T5-large, prompt 2, scored 0.8745.
+  \item \textbf{6.6\% lift:} $(0.8745 - 0.8207)/0.8207$; about 5 articles' worth, so a real effect.
+  \item \textbf{Level with fine-tuning:} $0.8745 - 0.8626 = 0.012$ above T5-small, about one article: call it a tie. (On ROUGE-2 T5-small is slightly ahead.)
+  \item \textbf{The catch:} the Flan scores used ROUGE without stemming, T5's with; each is one run on 100 articles.
+\end{itemize}
+\end{measured}
+
+%=====================================================================
+\section{What they will ask}
+
+\begin{iq}[\core]{How can a model with no training match a fine-tuned one?}
+Scale and instruction tuning. Flan-T5-large is 13 times the size of T5-small and has been trained to follow instructions across over a thousand tasks, including summarization and headlines. So ``write a headline for this'' is a task it effectively knows. Fine-tuning gives T5-small the task; Flan-T5-large brings it from scale.
+\end{iq}
+
+\begin{iq}[\core]{Why would the prompt wording matter?}
+The model learned from instructions written in particular ways. ``Headline'' matches a familiar task, short and title-like; ``summarize into a title'' can pull it towards a longer, summary-like answer. The weights are fixed, so the wording is the only lever, and it moved ROUGE-L by 0.054.
+\end{iq}
+
+\begin{iq}[\core]{Is 0.87 really better than 0.86?}
+No: 0.012 is about one article's worth, within noise for a single run on 100 articles, and ROUGE-2 points the other way. The fair claim is that zero-shot Flan-T5-large matched fine-tuned T5-small.
+\end{iq}
+
+\begin{iq}{Isn't trying prompts on the test set a form of tuning?}
+Yes, a mild one: choosing the better of two prompts by test score flatters the winner slightly. The clean way is to choose on the validation articles and report the test score once.
+\end{iq}
+
+\begin{iq}{Why did base and large prefer different prompts?}
+Smaller models follow instructions less reliably, so which wording works is less predictable. It's one run each, so I wouldn't read much into the flip; the size effect is the robust finding.
+\end{iq}
+
+\begin{iq}{What would you do next with Flan-T5?}
+Fine-tune it: Flan-T5-base or -large on the 13.4k pairs, with LoRA to keep it cheap, which trains only small extra matrices instead of every weight. That combines scale with task data.
+\end{iq}
+
+\begin{bugfix}[Don't say]
+\begin{itemize}
+  \item ``A 6.6-point lift.'' It's 6.6\% relative; 0.054 absolute.
+  \item ``Flan-T5 beat fine-tuning.'' It matched it, within one article.
+  \item ``Flan-T5 was fine-tuned.'' It was zero-shot: no training.
+\end{itemize}
+\end{bugfix}
