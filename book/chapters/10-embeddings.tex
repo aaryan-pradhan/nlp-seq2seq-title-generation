@@ -166,7 +166,7 @@ In ``The quick brown fox'', fox sits at position 4. Suppose $p_4 = (0.1, 0.0, -0
 \begin{steps}
   \item Embedding row: $(0.7, -0.1, 0.4)$.
   \item Add the position: $(0.7 + 0.1,\ -0.1 + 0.0,\ 0.4 - 0.2) = (0.8, -0.1, 0.2)$.
-  \item This vector, meaning plus position, is what enters the first decoder block.
+  \item This vector, meaning plus position, is what enters the first block of the decoder.
 \end{steps}
 \end{example}
 
@@ -347,7 +347,7 @@ Say: ``IDs index rows of the embedding matrix, positions are added, the blocks w
 \begin{enumerate}
   \item Each token ID picks its row of the embedding matrix $E$ ($V \times d$): $n$ tokens give an $n \times d$ matrix.
   \item The positional vector for each position is added; the shape stays $n \times d$.
-  \item The decoder blocks turn these meaning-plus-position vectors into context-aware ones (next chapter).
+  \item The blocks of the decoder turn these meaning-plus-position vectors into context-aware ones (next chapter).
   \item The output layer maps each final vector from $d$ numbers to $V$ logits.
   \item The next-token loss trains $E$, the positional table (if learned) and everything else together.
 \end{enumerate}

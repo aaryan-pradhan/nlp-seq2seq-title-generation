@@ -1,0 +1,417 @@
+\chapter{Attention and the decoder block}
+\label{ch:att}
+
+\begin{question}
+How does each token pull in information from the tokens around it, and what else sits in one block of a GPT-style decoder?
+\end{question}
+
+\begin{whatfor}
+An embedding gives ``apple'' one vector, fruit or company alike. Attention fixes that: every token asks every other token a question (its query), each answers (its key), the match scores are scaled and softmax-ed into weights, and the token takes that blend of the others' values. This chapter builds attention by hand on three tokens, adds the causal mask a decoder needs, explains why the cost grows with the square of the length, splits attention into several heads, and then assembles the whole GPT-2 block: layer normalization, residual connections, the feed-forward network, and the tied output layer. The chapter's card is attention itself.
+\end{whatfor}
+
+\begin{setup}
+\textbf{The system:} one block of a GPT-style decoder (GPT-2 small as the running example).
+\textbf{The one thing traced:} three tokens' vectors, from embeddings to context-aware vectors.
+\end{setup}
+
+\begin{recall}
+\textbf{Recall (chapter 5).} Each token's vector is turned by three learned matrices into a \emph{query} $q$, a \emph{key} $k$ and a \emph{value} $v$. In \emph{self-attention} token $i$'s output is $\sum_j \alpha_{ij} v_j$, with weights $\alpha_{ij}$ from a softmax of $q_i\cdot k_j/\sqrt d$. In the decoder of an encoder--decoder model, \emph{cross-attention} takes queries from the decoder and keys and values from the encoder. Chapter 10: the input to the block is an $n \times d$ matrix of embedding-plus-position vectors.
+\end{recall}
+
+%=====================================================================
+\section{Words you need}
+
+\subsection*{Why embeddings need context}
+
+\begin{definition}[Contextual embedding]
+An embedding table gives each token one fixed vector, whatever the sentence. In ``Apple released a new phone'', ``apple'' should sit near other tech companies, not near banana and orange. A \dfn{contextual embedding} is a token's vector after it has been adjusted by the tokens around it. Attention turns embeddings (semantic meaning) into contextual embeddings (meaning in this sentence).
+\end{definition}
+
+\subsection*{Attention, step by step}
+
+\begin{definition}[Attention score]
+Token $i$ asks with its query $q_i$ (``do you have anything useful for me?''); token $j$ answers with its key $k_j$ (``here is what I offer''). Their dot product $q_i \cdot k_j$ is the \dfn{attention score}: large when they match. All scores at once are one matrix product, $QK^{\mathsf T}$, where row $i$ of $Q$ is $q_i$ and row $j$ of $K$ is $k_j$. For $n$ tokens there are $n \times n$ scores: 4 for two tokens, 25 for five.
+\end{definition}
+
+\begin{definition}[Query, key and value matrices]
+$Q$, $K$ and $V$ come from the input $X$ ($n \times d$) through three trainable weight matrices: $Q = XW^Q$, $K = XW^K$, $V = XW^V$. Training tunes $W^Q$, $W^K$, $W^V$ so that useful questions meet useful answers.
+\end{definition}
+
+\begin{definition}[Scaled dot-product attention]
+Softmax is touchy about the size of its inputs: widely spread scores give almost all the weight to the largest, nearly equal ones give everyone the same. A dot product adds $d_k$ products, so it grows as the key length $d_k$ grows. Dividing by $\sqrt{d_k}$ keeps scores at a steady size. \dfn{Scaled dot-product attention} is the whole recipe:
+\[
+\operatorname{Attention}(Q, K, V) = \operatorname{softmax}\!\Big(\frac{QK^{\mathsf T}}{\sqrt{d_k}}\Big)\, V,
+\]
+where the softmax is applied to each row separately.
+\end{definition}
+
+\begin{example}[Why scaling matters]
+The softmax function on scores $(1, 2, 3)$ gives $(0.090, 0.245, 0.665)$: all three tokens contribute. On $(10, 20, 30)$, the same pattern ten times larger, it gives $(0.000, 0.000, 1.000)$ to three decimals: one token takes everything, and the others get almost no gradient to learn from.
+\end{example}
+
+\begin{definition}[Attention weight]
+After scaling and the softmax, row $i$ holds the \dfn{attention weights} $\alpha_{i1}, \dots, \alpha_{in}$: how much token $i$ takes from each token. Each row is positive and adds up to 1. Row $i$ of the output is the blend $\sum_j \alpha_{ij} v_j$, done for all rows at once by multiplying the weight matrix by $V$.
+\end{definition}
+
+\begin{example}[Attention on three tokens, by hand]
+$d_k = 2$. Queries and keys are the same here: $q_1 = k_1 = (1, 0)$, $q_2 = k_2 = (0, 1)$, $q_3 = k_3 = (1, 1)$. Values: $v_1 = (1, 0)$, $v_2 = (0, 1)$, $v_3 = (1, 1)$.
+\begin{steps}
+  \item Scores $QK^{\mathsf T}$: row 1 is $(1, 0, 1)$, row 2 $(0, 1, 1)$, row 3 $(1, 1, 2)$.
+  \item Divide by $\sqrt 2$: row 1 becomes $(0.707, 0, 0.707)$.
+  \item Softmax of row 1: $e^{0.707} = 2.028$, $e^0 = 1$, total $2.028 + 1 + 2.028 = 5.056$, so weights $(0.401, 0.198, 0.401)$.
+  \item Output of token 1: $0.401\,(1, 0) + 0.198\,(0, 1) + 0.401\,(1, 1) = (0.802, 0.599)$.
+\end{steps}
+Token 1 now carries some of tokens 2 and 3: it has context.
+\end{example}
+
+\subsection*{Attention in a decoder}
+
+\begin{definition}[Causal mask]
+In training, every position predicts its next token (chapter 9's shifted labels). If token 1 could attend to token 2, it would see the answer it must predict. The \dfn{causal mask} $M$ is an $n \times n$ matrix with $0$ where $j \le i$ and $-\infty$ where $j > i$ (the future). It is added to the scaled scores before the softmax; $e^{-\infty} = 0$, so future tokens get weight 0.
+\end{definition}
+
+\begin{definition}[Causal self-attention]
+\dfn{Causal self-attention} is self-attention with the causal mask: token $i$ attends only to tokens $1$ to $i$. Token 1 gives all its weight to itself, token 2 splits between 1 and 2, and only the last token sees the whole window. Decoders use it; encoders do not mask.
+\end{definition}
+
+\begin{example}[The same three tokens, masked]
+Scaled scores as before; the mask removes everything above the diagonal.
+\begin{steps}
+  \item Row 1: $(0.707, -\infty, -\infty)$ $\to$ weights $(1, 0, 0)$. Output $v_1 = (1, 0)$.
+  \item Row 2: $(0, 0.707, -\infty)$ $\to$ $e^0 = 1$, $e^{0.707} = 2.028$, total $3.028$: weights $(0.330, 0.670, 0)$. Output $0.330\,(1, 0) + 0.670\,(0, 1) = (0.330, 0.670)$.
+  \item Row 3: $(0.707, 0.707, 1.414)$, nothing masked $\to$ $2.028, 2.028, 4.113$, total $8.169$: weights $(0.248, 0.248, 0.503)$, which add to 1 before rounding. Output $(0.752, 0.752)$.
+\end{steps}
+\end{example}
+
+\begin{result}[Attention costs the square of the length]
+$n$ tokens make an $n \times n$ score matrix in every head of every layer. Doubling the context doubles $n$ and multiplies the scores by 4. GPT-2's window of 1,024 gives $1{,}024^2 = 1{,}048{,}576$ scores per head per layer; 2,048 would give $4{,}194{,}304$. This quadratic growth in memory and computation is what makes very long contexts expensive.
+\end{result}
+
+\subsection*{Many heads}
+
+\begin{definition}[Multi-head attention]
+One attention may track one kind of relation. \dfn{Multi-head attention} runs $h$ attentions side by side, each an \dfn{attention head} with its own $W^Q_i, W^K_i, W^V_i$ that project the $d$-long input down to $d_k = d/h$. The $h$ outputs, each $d_k$ long, are joined end to end (concatenated) back into $d$ numbers. Different heads can follow different things: meaning, grammar, long-range links.
+\end{definition}
+
+\begin{definition}[Output projection]
+After concatenation, one more trainable $d \times d$ matrix, the \dfn{output projection} $W^O$, mixes the heads' results into the final vector for each token.
+\end{definition}
+
+\begin{example}[Four heads on $d = 512$]
+$h = 4$, so each head works with $d_k = 512/4 = 128$.
+\begin{steps}
+  \item Each head: $Q_i, K_i, V_i$ are $n \times 128$; scores $n \times n$; output $n \times 128$.
+  \item Concatenate the 4 outputs: $n \times (4 \times 128) = n \times 512$.
+  \item Multiply by $W^O$ ($512 \times 512$): $n \times 512$, the input's shape again.
+\end{steps}
+GPT-2 small: $d = 768$, $h = 12$, so $d_k = 64$.
+\end{example}
+
+\begin{remark}[Where attention sits in the original Transformer]
+The encoder uses multi-head attention without a mask. The decoder uses masked multi-head attention, then cross-attention (queries from the decoder, keys and values from the encoder) for tasks such as translation. A decoder-only LLM has no encoder, so it keeps only the masked attention.
+\end{remark}
+
+\subsection*{The rest of the block}
+
+\begin{definition}[Layer normalization]
+\dfn{Layer normalization} rescales each token's vector to mean 0 and variance 1 across its $d$ features: subtract the vector's mean $\mu$, divide by its standard deviation $\sigma$. Values stay in a steady range, which steadies the gradients (no exploding or vanishing) and speeds training. The shape does not change.
+\end{definition}
+
+\begin{example}[Normalizing $(2, 4, 6, 8)$]
+One token with $d = 4$ features.
+\begin{steps}
+  \item Mean: $\mu = (2 + 4 + 6 + 8)/4 = 5$.
+  \item Variance: $\big((-3)^2 + (-1)^2 + 1^2 + 3^2\big)/4 = 20/4 = 5$, so $\sigma = \sqrt5 = 2.236$.
+  \item Normalized: $(-3, -1, 1, 3)/2.236 = (-1.342, -0.447, 0.447, 1.342)$.
+\end{steps}
+\end{example}
+
+\begin{definition}[Residual connection]
+A \dfn{residual connection} adds a layer's input to its output: $x + \operatorname{layer}(x)$. The addition is entry by entry, so the shape is kept. The gradient can flow straight through the addition, which lets deep stacks train and keeps earlier features from being lost.
+\end{definition}
+
+\begin{definition}[Feed-forward network]
+The \dfn{feed-forward network} in each block works on each token separately: a linear layer expands $d$ to a larger size (in GPT-2, $4d$: $768 \to 3{,}072$), a non-linear activation follows, and a second linear layer brings it back to $d$. The expansion gives room for more complex features; the output has the input's shape.
+\end{definition}
+
+\begin{definition}[Decoder block]
+A GPT-2 \dfn{decoder block}, in order: layer normalization $\to$ masked multi-head attention $\to$ add the residual $\to$ layer normalization $\to$ feed-forward network $\to$ add the residual. Its output has the same $n \times d$ shape as its input, so blocks can be stacked: GPT-2 small has 12.
+\end{definition}
+
+\begin{definition}[Weight tying]
+After the last block come a final layer normalization, the output layer and the softmax function. In GPT-2 the output layer reuses the embedding matrix (transposed) instead of having its own weights: \dfn{weight tying}. The same matrix that turns a token into a vector turns a vector back into scores for every token.
+\end{definition}
+
+\begin{remark}[GPT-2 small, and beyond]
+Embedding size 768, context 1,024 tokens, 12 blocks, 12 heads. Training computes the next-token loss at every position and back-propagates through all the blocks. Modern LLMs have contexts of thousands of tokens and more, many more heads and blocks, and embedding sizes in the tens of thousands, hence ``large''.
+\end{remark}
+
+\begin{sayit}[Say it in 20 seconds]
+Each token makes a query, key and value. Query dot key gives a score for every pair, divided by root $d_k$ so softmax doesn't saturate; softmax makes each row into weights, and the output is the weighted sum of values. In a decoder a causal mask sets future scores to minus infinity. Several heads run in parallel on smaller projections, are concatenated and projected. A block is layer norm, attention, residual, layer norm, feed-forward, residual, stacked 12 times in GPT-2 small. The $n \times n$ scores are why cost grows quadratically with context.
+\end{sayit}
+
+%=====================================================================
+\section{The picture}
+
+\begin{sayit}[Board 11.1 · One word, two meanings]
+\begin{pic}
+\begin{tikzpicture}[>={Latex[length=2mm]},font=\sffamily\scriptsize]
+\draw[prec!50] (-0.2,0) -- (7,0); \draw[prec!50] (0,-0.2) -- (0,3.4);
+\foreach \x/\y/\w in {0.3/1.6/banana,0.6/1.0/orange,0.5/2.2/mango} {\fill[exc] (\x,\y) circle (2pt); \node[anchor=west] at (\x,\y) {\w};}
+\foreach \x/\y/\w in {5.4/2.8/Google,6.0/2.4/Microsoft,5.2/2.2/Samsung} {\fill[defc] (\x,\y) circle (2pt); \node[anchor=west] at (\x,\y) {\w};}
+\fill[trapc] (1.9,1.4) circle (2.5pt); \node[anchor=north west,text=trapc] at (1.95,1.3) {apple (embedding)};
+\fill[thmc] (4.8,2.6) circle (2.5pt); \node[anchor=east,text=thmc] at (4.7,2.75) {apple after attention};
+\draw[->,thmc,thick] (2.0,1.5) -- (4.7,2.55);
+\node[anchor=west,font=\sffamily\small] at (3.4,0.3) {``Apple released a new phone''};
+\end{tikzpicture}
+\end{pic}
+Say: ``The embedding table has one vector for apple. Attention moves it according to the sentence: here towards the tech companies.''
+\end{sayit}
+
+\begin{sayit}[Board 11.2 · Query asks, key answers]
+\begin{pic}
+\begin{tikzpicture}[>={Latex[length=2mm]},font=\sffamily\small,
+  box/.style={draw=#1L,fill=#1,rounded corners=2pt,align=center,minimum height=9mm,inner sep=3pt}]
+\node[box=bda] (a) at (0,0) {token $i$\\query $q_i$};
+\node[box=bdv] (b) at (5,0.9) {token $j$\\key $k_j$};
+\node[box=bdv] (c) at (5,-0.9) {token $m$\\key $k_m$};
+\draw[->] (a) -- node[above,sloped,font=\sffamily\scriptsize]{anything for me?} (b);
+\draw[->] (a) -- node[below,sloped,font=\sffamily\scriptsize]{anything for me?} (c);
+\node[box=bdy,anchor=west] at (7,0.9) {$q_i \cdot k_j$ large: match};
+\node[box=bdy,anchor=west] at (7,-0.9) {$q_i \cdot k_m$ small};
+\end{tikzpicture}
+\end{pic}
+Say: ``The query is the question a token asks, the key is how each token advertises itself; their dot product is how well they match.''
+\end{sayit}
+
+\begin{sayit}[Board 11.3 · All scores in one product]
+\begin{pic}
+\begin{tikzpicture}[font=\sffamily\small]
+\node at (-0.3,0) {$Q$}; \draw[defc] (0,-0.75) rectangle (1,0.75); \node[font=\sffamily\scriptsize] at (0.5,-1.0) {$n \times d_k$};
+\node at (1.4,0) {$\times$};
+\node at (2.4,1.0) {$K^{\mathsf T}$}; \draw[exc] (1.8,-0.5) rectangle (3.3,0.5); \node[font=\sffamily\scriptsize] at (2.55,-1.0) {$d_k \times n$};
+\node at (3.8,0) {$=$};
+\foreach \i/\r in {0/{1,0,1},1/{0,1,1},2/{1,1,2}} \foreach \v [count=\j from 0] in \r {
+  \pgfmathtruncatemacro{\c}{\v*30}
+  \fill[thmc!\c,draw=thmc] (4.3+\j*0.6,0.6-\i*0.6) rectangle (4.9+\j*0.6,1.2-\i*0.6-0.6+0.6);
+  \node at (4.6+\j*0.6,0.9-\i*0.6) {\v};}
+\node[font=\sffamily\scriptsize] at (5.2,-1.0) {scores, $n \times n$};
+\node[anchor=west,font=\sffamily\scriptsize,align=left] at (6.6,0.3) {row $i$: what token $i$\\gets from each token};
+\end{tikzpicture}
+\end{pic}
+Say: ``One matrix product scores every pair. Three tokens, nine scores; five tokens, twenty-five.''
+\end{sayit}
+
+\begin{sayit}[Board 11.4 · Why divide by $\sqrt{d_k}$]
+\begin{pic}
+\begin{tikzpicture}[font=\sffamily\scriptsize]
+\node[font=\sffamily\small\bfseries] at (1.4,2.5) {softmax(1, 2, 3)};
+\node[font=\sffamily\small\bfseries] at (7.4,2.5) {softmax(10, 20, 30)};
+\foreach \p [count=\i from 0] in {0.090,0.245,0.665} {\fill[thmc!40,draw=thmc] (\i*1.0,0) rectangle (\i*1.0+0.7,3*\p); \node[above] at (\i*1.0+0.35,3*\p) {\p};}
+\foreach \p/\l [count=\i from 0] in {0/0.000,0/0.000,1/1.000} {\fill[trapc!40,draw=trapc] (6+\i*1.0,0) rectangle (6+\i*1.0+0.7,2*\p+0.01); \node[above] at (6+\i*1.0+0.35,2*\p) {\l};}
+\end{tikzpicture}
+\end{pic}
+Say: ``Big scores make softmax winner-take-all. Dot products grow with the key length, so dividing by root $d_k$ keeps the weights spread enough to learn from.''
+\end{sayit}
+
+\begin{sayit}[Board 11.5 · The attention pipeline]
+\begin{pic}
+\begin{tikzpicture}[>={Latex[length=2mm]},font=\sffamily\small,
+  box/.style={draw=#1L,fill=#1,rounded corners=2pt,align=center,minimum height=10mm,inner sep=3pt,text width=19mm}]
+\node[box=bdq,text width=10mm] (x) at (0,0) {$X$\\$n \times d$};
+\node[box=bda] (q) at (2.2,0.9) {$Q = XW^Q$};
+\node[box=bda] (k) at (2.2,-0.3) {$K = XW^K$};
+\node[box=bda] (v) at (2.2,-1.5) {$V = XW^V$};
+\node[box=bdy] (s) at (4.75,0.3) {$QK^{\mathsf T}/\sqrt{d_k}$};
+\node[box=bdr] (m) at (7.2,0.3) {$+\,M$\\(decoder)};
+\node[box=bdy] (w) at (9.65,0.3) {softmax\\by row};
+\node[box=bdg] (o) at (12.1,-0.6) {weights $\times V$\\$n \times d_k$};
+\draw[->] (x) -- (q); \draw[->] (x) -- (k); \draw[->] (x) -- (v);
+\draw[->] (q) -- (s); \draw[->] (k) -- (s); \draw[->] (s) -- (m); \draw[->] (m) -- (w); \draw[->] (w) -- (o); \draw[->] (v) -| (o);
+\end{tikzpicture}
+\end{pic}
+Say: ``Three projections, one score matrix, scale, mask in a decoder, softmax each row, then blend the values.''
+\end{sayit}
+
+\begin{sayit}[Board 11.6 · The weighted sum of values]
+\begin{pic}
+\begin{tikzpicture}[>={Latex[length=2mm]},font=\sffamily\small,
+  box/.style={draw=#1L,fill=#1,rounded corners=2pt,align=center,minimum height=8mm,inner sep=3pt}]
+\node[box=bdv] (v1) at (0,1.2) {$v_1 = (1, 0)$};
+\node[box=bdv] (v2) at (0,0) {$v_2 = (0, 1)$};
+\node[box=bdv] (v3) at (0,-1.2) {$v_3 = (1, 1)$};
+\node[box=bdg] (o) at (6,0) {token 1's output\\$(0.802, 0.599)$};
+\draw[->,line width=1.6pt,thmc!70] (v1) -- node[above,font=\sffamily\scriptsize,text=black]{0.401} (o);
+\draw[->,line width=0.8pt,thmc!70] (v2) -- node[above,font=\sffamily\scriptsize,text=black]{0.198} (o);
+\draw[->,line width=1.6pt,thmc!70] (v3) -- node[below,font=\sffamily\scriptsize,text=black]{0.401} (o);
+\end{tikzpicture}
+\end{pic}
+Say: ``The weights say how much of each value to take. Token 1 takes 40\% of itself, 20\% of token 2, 40\% of token 3.''
+\end{sayit}
+
+\begin{sayit}[Board 11.7 · The causal mask]
+\begin{pic}
+\begin{tikzpicture}[font=\sffamily\scriptsize]
+\node[font=\sffamily\small\bfseries] at (1.5,2.0) {mask $M$};
+\node[font=\sffamily\small\bfseries] at (7.5,2.0) {weights after softmax};
+\foreach \i in {0,...,4} \foreach \j in {0,...,4} {
+  \ifnum\j>\i \fill[trapc!25,draw=trapc!60] (\j*0.6,-\i*0.6+1.2) rectangle +(0.6,0.6); \node at (\j*0.6+0.3,-\i*0.6+1.5) {$-\infty$};
+  \else \fill[thmc!10,draw=thmc!50] (\j*0.6,-\i*0.6+1.2) rectangle +(0.6,0.6); \node at (\j*0.6+0.3,-\i*0.6+1.5) {0}; \fi}
+\foreach \i in {0,...,4} \foreach \j in {0,...,4} {
+  \ifnum\j>\i \draw[prec!30] (6+\j*0.6,-\i*0.6+1.2) rectangle +(0.6,0.6); \node[text=prec] at (6.3+\j*0.6,-\i*0.6+1.5) {0};
+  \else \pgfmathtruncatemacro{\c}{100/(\i+1)} \fill[thmc!\c,draw=thmc!50] (6+\j*0.6,-\i*0.6+1.2) rectangle +(0.6,0.6); \fi}
+\node[anchor=west,align=left] at (9.3,0.6) {token 1: only itself\\token 5: all five};
+\end{tikzpicture}
+\end{pic}
+Say: ``Minus infinity above the diagonal becomes weight zero after softmax, so no token can peek at the one it is meant to predict.''
+\end{sayit}
+
+\begin{sayit}[Board 11.8 · Quadratic growth]
+\begin{pic}
+\begin{tikzpicture}[font=\sffamily\scriptsize]
+\foreach \n/\s [count=\i from 0] in {256/1,512/4,1024/16,2048/64} {
+  \fill[defc!35,draw=defc] (\i*1.6,0) rectangle (\i*1.6+0.4,0.04*\s);
+  \node[below] at (\i*1.6+0.45,0) {$n = \n$};}
+\foreach \n/\s [count=\i from 0] in {256/1,512/2,1024/4,2048/8} \fill[thmc!40,draw=thmc] (\i*1.6+0.5,0) rectangle (\i*1.6+0.9,0.04*\s);
+\foreach \l [count=\i from 0] in {1,4,16,64} \node[above] at (\i*1.6+0.2,0.04*\l) {$\times\l$};
+\node[anchor=west,align=left] at (6.8,1.6) {\textcolor{thmc}{green}: tokens $n$ (doubles)\\\textcolor{defc}{blue}: scores $n^2$ (quadruples)};
+\end{tikzpicture}
+\end{pic}
+Say: ``Each doubling of the context multiplies the attention scores by four. That's the quadratic cost.''
+\end{sayit}
+
+\begin{sayit}[Board 11.9 · Four heads, then the output projection]
+\begin{pic}
+\begin{tikzpicture}[>={Latex[length=2mm]},font=\sffamily\small,
+  box/.style={draw=#1L,fill=#1,rounded corners=2pt,align=center,minimum height=8mm,inner sep=3pt}]
+\node[box=bdq] (x) at (0,0) {$X$: $n \times 512$};
+\foreach \i in {1,...,4} {\node[box=bda] (h\i) at (3.6,2.25-\i*0.9) {head \i: $n \times 128$}; \draw[->] (x.east) -- (h\i.west);}
+\node[box=bdy,text width=18mm] (c) at (7.4,0) {concat\\$n \times 512$};
+\foreach \i in {1,...,4} \draw[->] (h\i.east) -- (c.west);
+\node[box=bdg,text width=20mm] (o) at (10.4,0) {$\times\, W^O$\\$n \times 512$};
+\draw[->] (c) -- (o);
+\end{tikzpicture}
+\end{pic}
+Say: ``Each head attends in a smaller space with its own weights; join the four results and mix them with one more matrix. Same shape in, same shape out.''
+\end{sayit}
+
+\begin{sayit}[Board 11.10 · Three kinds of attention]
+\begin{pic}
+\begin{tikzpicture}[>={Latex[length=2mm]},font=\sffamily\small,
+  box/.style={draw=#1L,fill=#1,rounded corners=2pt,align=center,minimum height=12mm,inner sep=3pt,text width=34mm}]
+\node[box=bda] at (0,0) {\textbf{encoder}\\self-attention, no mask: every token sees all};
+\node[box=bdr] at (4.4,0) {\textbf{decoder}\\masked self-attention: only the past};
+\node[box=bdv] at (8.8,0) {\textbf{cross-attention}\\$Q$ from decoder, $K, V$ from encoder};
+\node[font=\sffamily\scriptsize,text=prec] at (4.4,-1.2) {a decoder-only LLM keeps only this one};
+\end{tikzpicture}
+\end{pic}
+Say: ``Encoders look both ways, decoders only back, and cross-attention links the two. GPT has no encoder, so only masked self-attention remains.''
+\end{sayit}
+
+\begin{sayit}[Board 11.11 · One GPT-2 decoder block]
+\begin{pic}
+\begin{tikzpicture}[>={Latex[length=2mm]},font=\sffamily\small,
+  box/.style={draw=#1L,fill=#1,rounded corners=2pt,align=center,minimum height=7mm,inner sep=3pt,minimum width=44mm}]
+\node[box=bdq] (in) at (0,0) {embedding + position ($n \times 768$)};
+\node[box=bdy] (n1) at (0,1.1) {layer norm};
+\node[box=bda] (a) at (0,2.2) {masked multi-head attention};
+\node[circle,draw,inner sep=1pt] (p1) at (0,3.2) {$+$};
+\node[box=bdy] (n2) at (0,4.1) {layer norm};
+\node[box=bdg] (f) at (0,5.2) {feed-forward ($768 \to 3072 \to 768$)};
+\node[circle,draw,inner sep=1pt] (p2) at (0,6.2) {$+$};
+\draw[->] (in) -- (n1); \draw[->] (n1) -- (a); \draw[->] (a) -- (p1); \draw[->] (p1) -- (n2); \draw[->] (n2) -- (f); \draw[->] (f) -- (p2);
+\draw[->,thmc] (in.east) -- ++(0.6,0) |- (p1.east);
+\draw[->,thmc] (p1.east) -- ++(2.8,0) |- (p2.east);
+\draw[prec,dashed,rounded corners=4pt] (-2.7,0.6) rectangle (3.7,6.6); \node[anchor=west,text=prec] at (3.8,3.6) {$\times 12$};
+\node[box=bdy] (n3) at (0,7.3) {final layer norm};
+\node[box=bdv] (o) at (0,8.4) {output layer (tied to $E$) $\to$ softmax};
+\draw[->] (p2) -- (n3); \draw[->] (n3) -- (o);
+\node[anchor=west,font=\sffamily\scriptsize,text=thmc] at (2.4,2.8) {residual};
+\end{tikzpicture}
+\end{pic}
+Say: ``Normalize, attend, add back; normalize, feed-forward, add back. The shape never changes, so twelve identical blocks stack, then a last norm and the tied output layer give the logits.''
+\end{sayit}
+
+\begin{sayit}[Board 11.12 · Layer norm on one vector]
+\begin{pic}
+\begin{tikzpicture}[font=\sffamily\scriptsize]
+\draw[prec] (-0.2,0) -- (3.4,0); \draw[prec] (5.8,0) -- (9.4,0);
+\foreach \v [count=\i from 0] in {2,4,6,8} {\fill[defc!35,draw=defc] (\i*0.8,0) rectangle (\i*0.8+0.6,0.2*\v); \node[above] at (\i*0.8+0.3,0.2*\v) {\v};}
+\draw[->,thick,prec] (3.8,0.8) -- node[above]{$(x - 5)/2.236$} (5.4,0.8);
+\foreach \v [count=\i from 0] in {-1.342,-0.447,0.447,1.342} {\fill[thmc!40,draw=thmc] (6+\i*0.8,0) rectangle (6+\i*0.8+0.6,0.8*\v);
+  \node at (6.3+\i*0.8,{\v<0 ? 0.8*\v-0.2 : 0.8*\v+0.2}) {\v};}
+\end{tikzpicture}
+\end{pic}
+Say: ``Same shape, same order, but now mean zero and spread one, for every token at every block.''
+\end{sayit}
+
+%=====================================================================
+\section{How it works}
+\begin{enumerate}
+  \item Input: the $n \times d$ embedding-plus-position matrix.
+  \item Layer norm, then for each head: $Q, K, V$; scores $QK^{\mathsf T}/\sqrt{d_k}$; add the causal mask; softmax by row; multiply by $V$.
+  \item Concatenate the heads, multiply by $W^O$, add the block's input (residual).
+  \item Layer norm, feed-forward network ($d \to 4d \to d$), add the residual. Repeat for every block.
+  \item Final layer norm; the output layer (tied to the embedding matrix) gives logits at every position; the softmax function gives probabilities; the loss compares every position with its shifted label.
+\end{enumerate}
+
+%=====================================================================
+\section*{Formula sheet}
+\addcontentsline{toc}{section}{Formula sheet}
+
+\begin{mastercard}[label=card:attn]{Attention}
+Every query is scored against every key, scaled, masked, softmax-ed by row, and used to blend the values; $h$ heads do this in parallel and are joined. With $X$ the queries' input ($n \times d$), $Y$ the keys' and values' input ($Y = X$ for self-attention), $d_k = d/h$, and $M$ the mask ($0$, or $-\infty$ above the diagonal):
+\[
+\boxed{\begin{gathered}\mathrm{head}_i = \operatorname{softmax}\!\Big(\frac{(XW^Q_i)(YW^K_i)^{\mathsf T}}{\sqrt{d_k}} + M\Big)(YW^V_i),\\ \operatorname{MHA}(X, Y) = [\mathrm{head}_1, \dots, \mathrm{head}_h]\, W^O.\end{gathered}}
+\]
+\begin{plugrows}
+  \plugrow{Self-attention, one head, no mask (encoder)}{\pstep{Box: $\operatorname{softmax}\big(QK^{\mathsf T}/\sqrt{d_k} + M\big)V$ with $Q = XW^Q$, $K = YW^K$, $V = YW^V$.}\pstep{Self-attention: $Y = X$. One head: $h = 1$, $d_k = d$, and $W^O$ can be dropped. Encoder: $M = 0$.}}{$\operatorname{softmax}(QK^{\mathsf T}/\sqrt{d})\,V$}{each token may see every token}{3 tokens, row 1 scaled $(0.707, 0, 0.707)$: $e$-values $2.028, 1, 2.028$, total $5.056$, weights $(0.401, 0.198, 0.401)$; output $(0.802, 0.599)$}
+  \plugrow{Causal self-attention (decoder)}{\pstep{Box with $Y = X$.}\pstep{Mask: $M_{ij} = -\infty$ for $j > i$, else 0.}\pstep{$e^{-\infty} = 0$, so row $i$ spreads its weight over tokens $1..i$ only.}}{$\alpha_{ij} = 0$ for $j > i$}{training on shifted labels; generation}{row 2 scaled $(0, 0.707, -\infty)$: $1, 2.028, 0$, total $3.028$, weights $(0.330, 0.670, 0)$; output $0.330(1,0) + 0.670(0,1) = (0.330, 0.670)$}
+  \plugrow{Cross-attention (encoder--decoder)}{\pstep{Box with $X$ = decoder vectors ($n$ rows), $Y$ = encoder output ($m$ rows).}\pstep{No mask: $M = 0$ (the whole input is known).}\pstep{Shapes: scores $(n \times d_k)(d_k \times m) = n \times m$.}}{decoder token $i$ blends encoder values}{an encoder exists (not in GPT)}{5 title tokens, 8 article tokens: a $5 \times 8$ score matrix per head}
+  \plugrow{Multi-head sizes}{\pstep{Box: $d_k = d/h$; each head outputs $n \times d_k$.}\pstep{Concatenate $h$ heads: $n \times (h\,d_k) = n \times d$.}\pstep{$W^O$ is $d \times d$, so the output is $n \times d$.}}{shape in $=$ shape out}{$d$ divisible by $h$}{$d = 512$, $h = 4$: $d_k = 128$, $4 \times 128 = 512$; GPT-2: $768/12 = 64$}
+  \plugrow{How many scores}{\pstep{Box: the score matrix is $(n \times d_k)(d_k \times n) = n \times n$ per head per layer.}\pstep{Context $n \to 2n$: $(2n)^2 = 4n^2$.}}{$n^2$ scores; $\times 4$ per doubling}{self-attention over $n$ tokens}{$n = 1{,}024$: $1{,}048{,}576$; $n = 2{,}048$: $4{,}194{,}304 = 4 \times 1{,}048{,}576$}
+\end{plugrows}
+\end{mastercard}
+
+\begin{intuition}
+Attention is a soft lookup. Each token sends a question, every token holds up a label, and instead of fetching the single best match, the token takes a blend of everyone's contents, weighted by how well the labels fit. Masking just hides the labels of tokens that haven't been written yet.
+\end{intuition}
+
+%=====================================================================
+\section{What they will ask}
+
+\begin{iq}[\core]{Walk me through self-attention.}
+Project each token's vector into a query, key and value with three learned matrices. Scores $QK^{\mathsf T}$ compare every query with every key; divide by $\sqrt{d_k}$; softmax each row into weights that add to 1; multiply by $V$, so each output is a weighted blend of values. Result: a contextual embedding for each token.
+\end{iq}
+
+\begin{iq}[\core]{Why divide by $\sqrt{d_k}$?}
+A dot product sums $d_k$ terms, so its size grows with $d_k$. Large scores push softmax towards one-hot: $(10, 20, 30)$ gives essentially $(0, 0, 1)$, against $(0.090, 0.245, 0.665)$ for $(1, 2, 3)$. Then gradients vanish. Scaling keeps scores in a range where softmax still spreads weight.
+\end{iq}
+
+\begin{iq}[\core]{What is the causal mask and why is it needed?}
+Each position is trained to predict the next token. Without a mask it could attend to that token and copy it. The mask adds $-\infty$ to scores of future positions, so after softmax their weights are 0; token $i$ sees only tokens $1..i$.
+\end{iq}
+
+\begin{iq}[\core]{Why multi-head attention?}
+Several smaller attentions, each with its own projections, can track different relations at once (meaning, grammar, distance). With $d = 768$ and 12 heads, each works in 64 dimensions; the outputs are concatenated and mixed by $W^O$, at about the cost of one full-size head.
+\end{iq}
+
+\begin{iq}[\core]{What is in a GPT-2 block?}
+Layer norm, masked multi-head attention, residual add; layer norm, feed-forward ($d \to 4d \to d$), residual add. Input and output are both $n \times d$, so 12 identical blocks stack. Then a final layer norm and the output layer, tied to the embedding matrix.
+\end{iq}
+
+\begin{iq}{Why is attention quadratic, and why does it matter?}
+Every token is scored against every token: $n^2$ scores per head per layer. Doubling the context quadruples the memory and compute for scores, which limits how long the context can be.
+\end{iq}
+
+\begin{iq}{What do residual connections and layer norm do?}
+Residuals add a layer's input to its output, so gradients flow straight through deep stacks and features are not lost. Layer norm rescales each token's vector to mean 0, variance 1, keeping values and gradients stable. Neither changes the shape.
+\end{iq}
+
+\begin{iq}{What is weight tying?}
+GPT-2's output layer reuses the embedding matrix instead of its own $d \times V$ weights. One matrix maps tokens to vectors and vectors back to token scores, saving $V \times d$ parameters.
+\end{iq}
+
+\begin{iq}{Cross-attention in a decoder-only model?}
+None. Cross-attention takes keys and values from an encoder; GPT has no encoder, so each block has only masked self-attention and the feed-forward network.
+\end{iq}

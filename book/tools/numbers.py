@@ -59,4 +59,25 @@ fox = tuple(sum(o[i] * E[i][j] for i in range(8)) for j in range(3)); assert fox
 assert tuple(r(a + b, 2) for a, b in zip(fox, (0.1, 0.0, -0.2))) == (0.8, -0.1, 0.2)
 assert 6 * 768 == 4608 and r(50257 / 768, 1) == 65.4
 
+# ch 11: three-token attention (full and causal), softmax saturation, layer norm, sizes
+from math import inf
+Qm = [(1,0),(0,1),(1,1)]; Vm = [(1,0),(0,1),(1,1)]
+S = [[dot(q, k) / sqrt(2) for k in Qm] for q in Qm]
+assert [r(x, 3) for x in S[0]] == [0.707, 0.0, 0.707] and r(S[2][2], 3) == 1.414
+def soft(row):
+    m = max(row); e = [exp(x - m) if x > -inf else 0 for x in row]; t = sum(e); return [x / t for x in e]
+assert r(exp(S[0][0]), 3) == 2.028 and r(2 * exp(S[0][0]) + 1, 3) == 5.056 and r(exp(S[2][2]), 3) == 4.113
+assert r(2 * exp(S[0][0]) + exp(S[2][2]), 3) == 8.169 and r(1 + exp(S[0][0]), 3) == 3.028
+blend = lambda w: tuple(r(sum(w[j] * Vm[j][c] for j in range(3)), 3) for c in range(2))
+w1 = soft(S[0]); assert [r(x, 3) for x in w1] == [0.401, 0.198, 0.401] and blend(w1) == (0.802, 0.599)
+A = [soft([x if j <= i else -inf for j, x in enumerate(S[i])]) for i in range(3)]
+assert [[r(x, 3) for x in row] for row in A] == [[1, 0, 0], [0.330, 0.670, 0], [0.248, 0.248, 0.503]]
+assert [blend(row) for row in A] == [(1, 0), (0.330, 0.670), (0.752, 0.752)]
+assert [r(x, 3) for x in soft([1, 2, 3])] == [0.090, 0.245, 0.665] and [r(x, 3) for x in soft([10, 20, 30])] == [0, 0, 1]
+xs = [2, 4, 6, 8]; mu = sum(xs) / 4; var = sum((x - mu) ** 2 for x in xs) / 4
+assert mu == 5 and var == 5 and r(sqrt(var), 3) == 2.236
+assert [r((x - mu) / sqrt(var), 3) for x in xs] == [-1.342, -0.447, 0.447, 1.342]
+assert 512 // 4 == 128 and 4 * 128 == 512 and 768 // 12 == 64 and 4 * 768 == 3072
+assert 1024 ** 2 == 1048576 and 2048 ** 2 == 4194304 == 4 * 1048576
+
 print('verify: ok')
