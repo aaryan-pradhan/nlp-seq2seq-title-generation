@@ -1,0 +1,208 @@
+\chapter{MQA and GQA}
+\label{ch:gqa}
+
+\begin{question}
+The KV cache holds one key and one value per head. What if several query heads shared the same key and value?
+\end{question}
+
+\begin{whatfor}
+Chapter 14 ended with a 393 GB cache. The cache scales with the number of key-value pairs kept per layer, and in multi-head attention that is one per head. This chapter cuts that number. Multi-query attention keeps a single key and value for all heads; grouped-query attention keeps one per group of heads, a middle road that keeps most of the quality. Both are the same formula with a different number of key-value heads, which is this chapter's card.
+\end{whatfor}
+
+\begin{setup}
+\textbf{The system:} one multi-head attention layer: 4 tokens, $d = 512$, 4 query heads of size 128.
+\textbf{The one thing traced:} how many key and value vectors the layer must cache, under three ways of sharing them.
+\end{setup}
+
+\begin{recall}
+\textbf{Recall.} Chapter 11: \emph{multi-head attention} gives each head its own $W^Q_i, W^K_i, W^V_i$, so with $X$ of size $4 \times 512$ and 4 heads, each head makes $4 \times 128$ queries, keys and values; the 4 outputs ($4 \times 128$ each) are concatenated to $4 \times 512$. Chapter 14: the \emph{KV cache} stores every head's keys and values in every layer, $2 \times L \times n_{\text{heads}} \times d_{\text{head}} \times n_{\text{ctx}} \times B \times b$ bytes.
+\end{recall}
+
+%=====================================================================
+\section{Words you need}
+
+\begin{definition}[Key-value head]
+A \dfn{key-value head} is one pair of key and value projections ($W^K$, $W^V$) with the keys and values it produces. In multi-head attention there are as many key-value heads as query heads: head $i$ uses $K_i, V_i$, and the cache holds all of them. Write $n_{\text{kv}}$ for the number of key-value heads.
+\end{definition}
+
+\begin{definition}[Multi-query attention]
+\dfn{Multi-query attention} (MQA) keeps every query head but only one key-value head, shared by all of them: $n_{\text{kv}} = 1$. Each head still asks its own question with its own $Q_i$, but all read the same $K$ and $V$. The cache shrinks by a factor of $n_{\text{heads}}$, and decoding gets faster because far less is read from memory. The price is some loss of quality, and training a separate model just for fast inference may not be wanted.
+\end{definition}
+
+\begin{definition}[Grouped-query attention]
+\dfn{Grouped-query attention} (GQA) splits the query heads into $G$ groups; each group shares one key-value head, so $n_{\text{kv}} = G$. Written GQA-$G$:
+\begin{itemize}
+  \item GQA-1: one group, one key-value head: this is MQA.
+  \item GQA-$H$ with $H = n_{\text{heads}}$: every head its own: this is ordinary multi-head attention (MHA).
+  \item In between, the cache shrinks by $n_{\text{heads}}/G$ while quality stays close to MHA and speed close to MQA.
+\end{itemize}
+\end{definition}
+
+\begin{example}[Four heads, three ways]
+4 query heads $Q_1, \dots, Q_4$, each $4 \times 128$.
+\begin{steps}
+  \item MHA: pairs $(K_1, V_1), \dots, (K_4, V_4)$; $n_{\text{kv}} = 4$.
+  \item GQA-2: $Q_1, Q_2$ use $(K_1, V_1)$; $Q_3, Q_4$ use $(K_2, V_2)$; $n_{\text{kv}} = 2$.
+  \item MQA: all four use $(K, V)$; $n_{\text{kv}} = 1$.
+  \item Numbers cached for these 4 tokens in this layer: $2 \times n_{\text{kv}} \times 4 \times 128$, so $4{,}096$, $2{,}048$, $1{,}024$.
+\end{steps}
+Every variant still produces four $4 \times 128$ head outputs, concatenated to $4 \times 512$: only the keys and values are shared.
+\end{example}
+
+\begin{definition}[Uptraining]
+An existing multi-head model need not be retrained from scratch. \dfn{Uptraining}: average (mean-pool) the key and value projections of the heads in each group into one key-value head, then continue training for a small fraction of the original pretraining compute (about 5\%) so the model adapts.
+\end{definition}
+
+\begin{result}[The trade-off]
+MHA: best quality, biggest cache, slowest decoding. MQA: smallest cache, fastest, some quality lost. GQA: quality close to MHA at a speed close to MQA, which is why many recent LLMs use it.
+\end{result}
+
+\begin{sayit}[Say it in 20 seconds]
+The KV cache stores keys and values per head, so its size is proportional to the number of key-value heads. Multi-head attention has one per query head; multi-query attention shares a single key-value head across all query heads, cutting the cache by the number of heads at some cost in quality; grouped-query attention shares one per group of heads, GQA-1 being MQA and GQA-$H$ being MHA. A model with 128 heads and 8 groups needs a 16 times smaller cache: 393 GB becomes 24.6 GB.
+\end{sayit}
+
+%=====================================================================
+\section{The picture}
+
+\begin{sayit}[Board 15.1 · Multi-head attention: every head its own K and V]
+\begin{pic}
+\begin{tikzpicture}[>={Latex[length=2mm]},font=\sffamily\small,
+  q/.style={draw=bdaL,fill=bda,rounded corners=2pt,minimum width=11mm,minimum height=7mm},
+  kv/.style={draw=#1L,fill=#1,rounded corners=2pt,minimum width=14mm,minimum height=7mm}]
+\node[draw=bdyL,fill=bdy,rounded corners=2pt] (x) at (4.5,1.5) {$X$: $4 \times 512$};
+\foreach \i/\c in {1/bdv,2/bdg,3/bdr,4/bdq} {
+  \node[q] (q\i) at (\i*2.4-1.2,0) {$Q_\i$};
+  \node[kv=\c] (k\i) at (\i*2.4-1.2,-1.1) {$K_\i\ V_\i$};
+  \draw[->] (x) -- (q\i); \draw[->] (q\i) -- (k\i);}
+\node[font=\sffamily\scriptsize,text=prec] at (4.5,-2.0) {4 key-value heads cached};
+\end{tikzpicture}
+\end{pic}
+Say: ``Four heads, four sets of keys and values, all four in the cache.''
+\end{sayit}
+
+\begin{sayit}[Board 15.2 · Multi-query attention: one shared K and V]
+\begin{pic}
+\begin{tikzpicture}[>={Latex[length=2mm]},font=\sffamily\small,
+  q/.style={draw=bdaL,fill=bda,rounded corners=2pt,minimum width=11mm,minimum height=7mm}]
+\foreach \i in {1,...,4} \node[q] (q\i) at (\i*2.4-1.2,0) {$Q_\i$};
+\node[draw=bdrL,fill=bdr,rounded corners=2pt,minimum width=30mm,minimum height=7mm] (k) at (4.8,-1.6) {one $K$, one $V$};
+\foreach \i in {1,...,4} \draw[->] (k) -- (q\i);
+\node[font=\sffamily\scriptsize,text=prec] at (4.8,-2.4) {1 key-value head cached: $4\times$ smaller};
+\end{tikzpicture}
+\end{pic}
+Say: ``Every head keeps its own question but they all read the same keys and values. The cache drops by the number of heads.''
+\end{sayit}
+
+\begin{sayit}[Board 15.3 · Grouped-query attention, GQA-2]
+\begin{pic}
+\begin{tikzpicture}[>={Latex[length=2mm]},font=\sffamily\small,
+  q/.style={draw=bdaL,fill=bda,rounded corners=2pt,minimum width=11mm,minimum height=7mm}]
+\fill[bdv,rounded corners=4pt] (0.0,0.6) rectangle (4.3,-2.1); \node[anchor=south west,font=\sffamily\scriptsize] at (0.05,-2.05) {group 1};
+\fill[bdg,rounded corners=4pt] (4.9,0.6) rectangle (9.2,-2.1); \node[anchor=south east,font=\sffamily\scriptsize] at (9.15,-2.05) {group 2};
+\foreach \i/\x in {1/1.0,2/3.3,3/5.9,4/8.2} \node[q] (q\i) at (\x,0) {$Q_\i$};
+\node[draw=defc,fill=white,rounded corners=2pt] (k1) at (2.15,-1.4) {$K_1\ V_1$};
+\node[draw=defc,fill=white,rounded corners=2pt] (k2) at (7.05,-1.4) {$K_2\ V_2$};
+\draw[->] (k1) -- (q1); \draw[->] (k1) -- (q2); \draw[->] (k2) -- (q3); \draw[->] (k2) -- (q4);
+\node[font=\sffamily\scriptsize,text=prec] at (4.6,-2.5) {2 key-value heads cached: $2\times$ smaller};
+\end{tikzpicture}
+\end{pic}
+Say: ``Heads in a group share keys and values; groups don't. With two groups the cache halves.''
+\end{sayit}
+
+\begin{sayit}[Board 15.4 · One dial: the number of groups]
+\begin{pic}
+\begin{tikzpicture}[font=\sffamily\scriptsize]
+\draw[thick,prec] (0,0) -- (11,0);
+\foreach \x/\g/\l/\c in {0/1/{GQA-1 = MQA}/trapc,3.67/2/GQA-2/defc,7.33/{\dots}/{}/prec,11/H/{GQA-$H$ = MHA}/thmc} {\fill[\c] (\x,0) circle (3pt); \node[above,text=\c] at (\x,0.15) {\l};}
+\node[below,align=center] at (0,-0.2) {smallest cache\\fastest\\quality loss};
+\node[below,align=center] at (5.5,-0.2) {GQA-$G$: cache $\div\, H/G$\\near-MHA quality, near-MQA speed};
+\node[below,align=center] at (11,-0.2) {biggest cache\\slowest\\best quality};
+\end{tikzpicture}
+\end{pic}
+Say: ``MQA and MHA are the two ends of GQA. Choosing the number of groups trades memory and speed against quality.''
+\end{sayit}
+
+\begin{sayit}[Board 15.5 · The big cache, three ways]
+\begin{pic}
+\begin{tikzpicture}[font=\sffamily\scriptsize,x=0.022cm]
+\foreach \v/\l/\c [count=\i from 0] in {393.2/{MHA, 128 key-value heads: 393 GB}/trapc,24.6/{GQA-8: 24.6 GB}/defc,3.1/{MQA: 3.1 GB}/thmc} {
+  \fill[\c!35,draw=\c] (0,-\i*0.7) rectangle (\v,-\i*0.7+0.45);
+  \node[anchor=west] at (\v+4,-\i*0.7+0.22) {\l};}
+\node[anchor=west,text=prec] at (0,0.75) {60 layers, 128 query heads of 128, 100,000 tokens, 16-bit};
+\end{tikzpicture}
+\end{pic}
+Say: ``Same model, same context. Sharing keys and values across 16 heads per group takes the cache from 393 to 25 gigabytes.''
+\end{sayit}
+
+\begin{sayit}[Board 15.6 · Uptraining an MHA model into GQA]
+\begin{pic}
+\begin{tikzpicture}[>={Latex[length=2mm]},font=\sffamily\small,
+  box/.style={draw=#1L,fill=#1,rounded corners=2pt,align=center,minimum height=10mm,inner sep=3pt,text width=27mm}]
+\node[box=bdq] (a) at (0,0) {MHA checkpoint\\$K_1..K_4$, $V_1..V_4$};
+\node[box=bda] (b) at (4.2,0) {mean-pool per group:\\average the $W^K$s and the $W^V$s};
+\node[box=bdg] (c) at (8.4,0) {train a little more\\(about 5\% of pretraining)};
+\draw[->] (a) -- (b); \draw[->] (b) -- (c);
+\end{tikzpicture}
+\end{pic}
+Say: ``You don't have to start over: average each group's key and value projections, then train briefly so the model adjusts.''
+\end{sayit}
+
+%=====================================================================
+\section{How it works}
+\begin{enumerate}
+  \item Keep all $n_{\text{heads}}$ query projections.
+  \item Make only $n_{\text{kv}}$ key and value projections: $n_{\text{heads}}$ for MHA, $G$ for GQA, 1 for MQA.
+  \item Query head $i$ attends with the key-value head of its group.
+  \item Concatenate the $n_{\text{heads}}$ outputs and apply $W^O$ as before.
+  \item The cache stores only the $n_{\text{kv}}$ key-value heads, per layer, per token.
+\end{enumerate}
+
+%=====================================================================
+\section*{Formula sheet}
+\addcontentsline{toc}{section}{Formula sheet}
+
+\begin{mastercard}[label=card:kv]{KV-cache memory}
+Two stored vectors (key and value) per token, per key-value head, per layer, per sequence. With $L$ layers, $n_{\text{kv}}$ key-value heads of size $d_{\text{head}}$, $n_{\text{ctx}}$ tokens, batch $B$ and $b$ bytes per number:
+\[
+\boxed{\begin{gathered}\text{bytes} = 2 \cdot L \cdot n_{\text{kv}} \cdot d_{\text{head}} \cdot n_{\text{ctx}} \cdot B \cdot b,\\ n_{\text{kv}} = n_{\text{heads}}\ (\text{MHA}),\quad G\ (\text{GQA-}G),\quad 1\ (\text{MQA}).\end{gathered}}
+\]
+\begin{plugrows}
+  \plugrow{Multi-head attention (chapter 14)}{\pstep{Box: $2 L\, n_{\text{kv}}\, d_{\text{head}}\, n_{\text{ctx}} B b$.}\pstep{MHA: $n_{\text{kv}} = n_{\text{heads}}$.}\pstep{GPT-2 small: $L = 12$, $n_{\text{heads}} = 12$, $d_{\text{head}} = 64$, $n_{\text{ctx}} = 1{,}024$, $B = 1$, $b = 2$.}}{$2 L\, n_{\text{heads}}\, d_{\text{head}}\, n_{\text{ctx}} B b$}{every head its own K, V}{$2 \times 12 \times 12 \times 64 \times 1{,}024 \times 1 \times 2 = 37{,}748{,}736$ B $= 36$ MiB; large model: $2 \times 60 \times 128 \times 128 \times 100{,}000 \times 2 = 393$ GB}
+  \plugrow{Grouped-query attention}{\pstep{Box with $n_{\text{kv}} = G$.}\pstep{Compared with MHA: divide by $n_{\text{heads}}/G$.}}{MHA bytes $\times\, G/n_{\text{heads}}$}{$G$ divides $n_{\text{heads}}$}{large model, $G = 8$: $393.2/(128/8) = 393.2/16 = 24.6$ GB}
+  \plugrow{Multi-query attention}{\pstep{Box with $n_{\text{kv}} = 1$.}\pstep{Compared with MHA: divide by $n_{\text{heads}}$.}}{MHA bytes $/\, n_{\text{heads}}$}{one shared K, V}{large model: $393.2/128 = 3.07$ GB}
+  \plugrow{Cost of one more token}{\pstep{Box with $n_{\text{ctx}} = 1$.}}{bytes per token per sequence}{cache grows linearly}{GPT-2 small: $2 \times 12 \times 12 \times 64 \times 2 = 36{,}864$ B $= 36$ KiB per token}
+  \plugrow{A batch of users}{\pstep{Box with batch $B$: every sequence has its own cache.}}{$B \times$ single-sequence bytes}{one cache per sequence}{GPT-2 small, $B = 8$: $8 \times 36 = 288$ MiB}
+  \plugrow{One layer, a few tokens (toy)}{\pstep{Box with $L = 1$, count numbers instead of bytes ($b = 1$, $B = 1$).}\pstep{$n_{\text{ctx}} = 4$, $d_{\text{head}} = 128$.}}{$2 \cdot n_{\text{kv}} \cdot 4 \cdot 128$}{toy layer of this chapter}{MHA $n_{\text{kv}} = 4$: $4{,}096$; GQA-2: $2{,}048$; MQA: $1{,}024$}
+\end{plugrows}
+\end{mastercard}
+
+\begin{intuition}
+Queries are per token and per question; keys and values are the library everyone reads. Many readers can share one library with little loss, and the library is what must be kept in memory for every past token, so sharing it is where the savings are.
+\end{intuition}
+
+%=====================================================================
+\section{What they will ask}
+
+\begin{iq}[\core]{What are MQA and GQA, and why use them?}
+Variants of multi-head attention that share key and value projections between query heads. MQA: one key-value head for all. GQA: one per group of heads. They shrink the KV cache by $n_{\text{heads}}$ or $n_{\text{heads}}/G$ and speed up decoding, which is limited by reading the cache from memory.
+\end{iq}
+
+\begin{iq}[\core]{How do MHA, GQA and MQA relate?}
+GQA-$G$ with $G$ groups: GQA-1 is MQA, GQA-$H$ (one group per head) is MHA. The only change is the number of key-value heads $n_{\text{kv}}$.
+\end{iq}
+
+\begin{iq}[\core]{How much does GQA save?}
+Cache bytes $= 2 L\, n_{\text{kv}}\, d_{\text{head}}\, n_{\text{ctx}} B b$. With 128 query heads and 8 groups, 16 times less: 393 GB becomes 24.6 GB for a 60-layer model at 100,000 tokens.
+\end{iq}
+
+\begin{iq}{Why not always use MQA?}
+One key-value head for every query head can lose quality, and training a separate model just for fast inference may not be worth it. GQA keeps quality close to MHA with most of the saving.
+\end{iq}
+
+\begin{iq}{Can an existing MHA model be converted?}
+Yes, by uptraining: mean-pool each group's key and value projections into one, then continue training for a small fraction (about 5\%) of the original pretraining compute.
+\end{iq}
+
+\begin{iq}{Does MQA change the number of query heads or the output size?}
+No. All query heads stay, each produces its own output, and they are concatenated to $d$ and projected by $W^O$ as before. Only the keys and values are shared.
+\end{iq}

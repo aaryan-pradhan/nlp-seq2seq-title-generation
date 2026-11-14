@@ -135,4 +135,10 @@ assert kv(12, 12, 64, 1024) == 37748736 and kv(12, 12, 64, 1024) / 2**20 == 36
 big = kv(60, 128, 128, 100000); assert big == 393216000000 and round(big / 1e9) == 393 and round(big / 2**30) == 366
 assert big / 80e9 > 4
 
+# ch 15: KV-cache memory with n_kv key-value heads
+assert [2 * nkv * 4 * 128 for nkv in (4, 2, 1)] == [4096, 2048, 1024] and 512 // 4 == 128
+assert r(big / 1e9, 1) == 393.2 and r(kv(60, 8, 128, 100000) / 1e9, 1) == 24.6 == r(393.2 / 16, 1)
+assert r(kv(60, 1, 128, 100000) / 1e9, 2) == 3.07 and r(393.2 / 128, 2) == 3.07 and 128 // 8 == 16
+assert kv(12, 12, 64, 1) == 36864 == 36 * 1024 and kv(12, 12, 64, 1024, 8) / 2**20 == 288
+
 print('verify: ok')

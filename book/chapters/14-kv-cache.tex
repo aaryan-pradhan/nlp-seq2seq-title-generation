@@ -192,7 +192,7 @@ Say: ``Thirty-six megabytes is nothing; four hundred gigabytes is several GPUs' 
   \item Memory grows by $2 \times L \times n_{\text{heads}} \times d_{\text{head}} \times b$ bytes per token per sequence.
 \end{enumerate}
 
-No formula sheet in this chapter: the cache-memory formula becomes the KV-cache card in the next chapter, where multi-query and grouped-query attention are its other rows.
+No formula sheet in this chapter: the cache-memory formula becomes the KV-cache card in the next chapter, where the ways of sharing keys and values between heads are its other rows.
 
 \begin{intuition}
 Past tokens never change in a causal model, so neither do their keys and values: computing them again is pure waste. The cache trades memory for time, which is a good deal until the memory itself becomes the bottleneck.
