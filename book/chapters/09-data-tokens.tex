@@ -1,0 +1,380 @@
+\chapter{Data and tokens}
+\label{ch:data}
+
+\begin{question}
+How is raw internet text cleaned, cut into tokens, turned into numbers, and laid out as next-token training examples?
+\end{question}
+
+\begin{whatfor}
+Before an LLM can learn anything, three questions need answers: what data to use, how to clean it, and how to shape it for training. This chapter cleans web text, compares three ways of cutting text into tokens (words, characters, subwords by byte pair encoding), adds the special tokens of a chat template, and slices the token stream into fixed-length windows whose labels are the same tokens shifted by one. It ends with the real data recipes of GPT-2 and GPT-3.
+\end{whatfor}
+
+\begin{setup}
+\textbf{The system:} the data pipeline in front of a GPT-style model.
+\textbf{The one thing traced:} a stretch of web text, from a raw page to rows of token numbers with their labels.
+\end{setup}
+
+\begin{recall}
+\textbf{Recall.} The \emph{vocabulary} is the fixed list of tokens a model can read and write, each with a number; \emph{special tokens} are extra entries with a job, such as \code{<EOS>}. \emph{Subword tokens} keep common words whole and split rare ones into pieces. Chapter 8: an LLM predicts the next token from all the tokens before it.
+\end{recall}
+
+%=====================================================================
+\section{Words you need}
+
+\subsection*{Cleaning the data}
+
+\begin{definition}[Data cleaning]
+\dfn{Data cleaning} is everything done to raw text before training so that the model learns from useful, safe, varied language. For web text there are four problems to remove:
+\begin{itemize}
+  \item \textbf{HTML boilerplate}: the page code around the real content (headers, menus, scripts, comments). Only the useful text is kept.
+  \item \textbf{Harmful content}: hateful, violent or otherwise unsafe text.
+  \item \textbf{Duplicates}: the same text on many pages. Left in, it is learned again and again and memorised.
+  \item \textbf{Low-quality text}: broken formatting, spam (``BUY NOW!!!''), error pages such as ``404 not found''.
+\end{itemize}
+\end{definition}
+
+\begin{definition}[Deduplication]
+\dfn{Deduplication}: removing repeated documents. ``Fuzzy'' deduplication also removes near-copies, documents that differ only in small details.
+\end{definition}
+
+\begin{definition}[Data mixture]
+The \dfn{data mixture} is the share of training examples drawn from each source (web, books, Wikipedia, \dots). Sources are not sampled in proportion to their size: small high-quality ones are drawn more often, so the data set is balanced.
+\end{definition}
+
+\subsection*{Cutting text into tokens}
+
+\begin{definition}[Word-level tokenization]
+\dfn{Word-level tokenization} splits text on spaces (and punctuation), so each word is one token. The vocabulary is every distinct word seen.
+\end{definition}
+
+\begin{definition}[Token ID]
+A \dfn{token ID} is the number a token has in the vocabulary. A model never sees text, only the list of token IDs.
+\end{definition}
+
+\begin{example}[Word-level, on a six-sentence text]
+Text: ``The cat runs. The cat jumps. The cat sleeps. The dog runs. The dog jumps. The dog sleeps.''
+\begin{steps}
+  \item Split into words and full stops: 24 tokens.
+  \item Number each new token in order of first appearance: The 1, cat 2, runs 3, . 4, jumps 5, sleeps 6, dog 7. The vocabulary has 7 entries.
+  \item Replace each token by its ID:
+  \[\begin{gathered}[1, 2, 3, 4,\ \ 1, 2, 5, 4,\ \ 1, 2, 6, 4,\\ 1, 7, 3, 4,\ \ 1, 7, 5, 4,\ \ 1, 7, 6, 4].\end{gathered}\]
+\end{steps}
+\end{example}
+
+\begin{definition}[Out-of-vocabulary word]
+An \dfn{out-of-vocabulary word} (OOV) is a word that was not in the training text, so it has no ID. With the vocabulary above, ``The cat is sleeping'' becomes $[1, 2, ?, ?]$: ``is'' was never seen, and ``sleeping'' is not ``sleeps''.
+\end{definition}
+
+\begin{definition}[Character-level tokenization]
+\dfn{Character-level tokenization} makes each character one token. The vocabulary is tiny: here a 0, b 1, \dots, z 25, space 26, full stop 27.
+\end{definition}
+
+\begin{example}[Character-level, ``how are you'']
+Eleven characters, so 11 tokens (three words would be 3):
+\[
+\text{h o w \_ a r e \_ y o u} \ \to\ [7, 14, 22, 26, 0, 17, 4, 26, 24, 14, 20].
+\]
+Every word can be written, but one ID such as 14 (``o'') means nothing on its own.
+\end{example}
+
+\begin{result}[Word against character tokens]
+The two extremes trade off as follows.
+\begin{itemize}
+  \item \textbf{Words:} each token carries meaning and suits language modelling, but the vocabulary is huge (every word form is a separate token) and unseen words are OOV.
+  \item \textbf{Characters:} a vocabulary of a few dozen and no OOV words, but sequences are several times longer, single tokens carry no meaning, and grammar is harder to learn from them.
+\end{itemize}
+Subwords sit in between: whole tokens for common words, pieces for rare ones.
+\end{result}
+
+\begin{definition}[Byte pair encoding]
+\dfn{Byte pair encoding} (BPE) builds a subword vocabulary from data. Start with single characters as tokens. Then repeat: count every pair of neighbouring tokens in the training text, and merge the most frequent pair into one new token. Stop when the vocabulary reaches the size wanted. To tokenize new text, apply the learned merges in the same order.
+\end{definition}
+
+\begin{example}[BPE on ``low, lowest, newer, wider'']
+Each word starts as letters: l o w / l o w e s t / n e w e r / w i d e r. Ties are broken by the pair seen first.
+\begin{steps}
+  \item Pair counts: (l,o) 2, (o,w) 2, (w,e) 2, (e,r) 2, all others 1. Merge l+o $\to$ ``lo''.
+  \item Now (lo,w) 2, (w,e) 2, (e,r) 2. Merge lo+w $\to$ ``low''.
+  \item Now (e,r) 2 is the only pair seen twice. Merge e+r $\to$ ``er''.
+  \item The unseen word ``lower'': l o w e r $\to$ lo w e r $\to$ low e r $\to$ low er. Two subword tokens, \textbf{[low, er]}, and no OOV.
+\end{steps}
+\end{example}
+
+\begin{remark}[BPE in practice]
+GPT models use BPE. Common words get one token each, and punctuation such as the full stop gets its own; a rare word such as ``TOKENIZATION'' in capitals is split into a few pieces. GPT-2's vocabulary has 50,257 tokens.
+\end{remark}
+
+\subsection*{Special tokens in a chat template}
+
+\begin{remark}[Special tokens]
+Chat templates (chapter 8) are written with special tokens, and each one has its own token ID like any other token. One real chat format marks a turn with \code{<|im\_start|>}, the role (\code{system}, \code{user}, \code{assistant}), \code{<|im\_sep|>}, the text, and \code{<|im\_end|>}; \code{<|endoftext|>} marks the end of a document. Each provider has its own set.
+\end{remark}
+
+\subsection*{Shaping the training data}
+
+\begin{definition}[Context window]
+The \dfn{context window} is the largest number of tokens the model reads at once. Training text is cut into pieces of this length. GPT-2 used 1,024 tokens; the examples here use 10.
+\end{definition}
+
+\begin{definition}[Shifted labels]
+For each window of input token IDs, the labels are the same text shifted one place to the left: the label at position $t$ is the token at position $t+1$. These are the \dfn{shifted labels}. A window of $n$ tokens therefore holds $n$ next-token questions at once: from token 1 predict token 2, from tokens 1--2 predict token 3, \dots, from tokens 1--$n$ predict token $n+1$.
+\end{definition}
+
+\begin{example}[One window of 10 tokens]
+Text (word tokens for clarity): ``On a cold morning the old fisherman pulled a glass bottle from the sea \dots''.
+\begin{steps}
+  \item Input: On a cold morning the old fisherman pulled a glass.
+  \item Labels: a cold morning the old fisherman pulled a glass bottle.
+  \item As IDs, with tokens numbered 1, 2, 3, \dots\ in order: input $[1, 2, \dots, 10]$, labels $[2, 3, \dots, 11]$.
+  \item The 10 questions: $[1] \to 2$, $[1, 2] \to 3$, \dots, $[1, \dots, 10] \to 11$. In words: ``On'' $\to$ ``a'', ``On a'' $\to$ ``cold'', \dots, ``On \dots\ glass'' $\to$ ``bottle''.
+\end{steps}
+\end{example}
+
+\begin{example}[How many windows and batches]
+A text of 60 tokens, context window 10, batch size 2, windows placed end to end.
+\begin{steps}
+  \item Each window needs 10 inputs plus 1 more token for its last label, so window $k$ (from 0) uses tokens $10k+1$ to $10k+11$.
+  \item The last token used must exist: $10k + 11 \le 60$, so $k \le 4.9$, so $k = 0, 1, 2, 3, 4$: \textbf{5 windows}, the same as $\lfloor (60-1)/10 \rfloor = 5$.
+  \item Questions: $5 \times 10 = 50$ next-token predictions.
+  \item Batches of 2 windows: $\lceil 5/2 \rceil = 3$ batches, the last holding one window.
+\end{steps}
+\end{example}
+
+\subsection*{Real recipes}
+
+\begin{remark}[GPT-2's data]
+About 8 million web pages (40 GB of text), BPE vocabulary of 50,257 tokens, context window 1,024 tokens, batch size 512.
+\end{remark}
+
+\begin{remark}[GPT-3's data mixture]
+GPT-3 was trained on 300 billion tokens drawn from five sources. Common Crawl was filtered by similarity to known high-quality text (45 TB of compressed text before filtering, 570 GB after, about 400 billion BPE tokens) and fuzzily deduplicated; curated sources were added. The reported mixture:
+\begin{itemize}
+  \item Common Crawl (filtered): 410 billion tokens, 60\% of the mix, seen 0.44 times.
+  \item WebText2: 19 billion, 22\%, seen 2.9 times.
+  \item Books1: 12 billion, 8\%, seen 1.9 times.
+  \item Books2: 55 billion, 8\%, seen 0.43 times.
+  \item Wikipedia: 3 billion, 3\%, seen 3.4 times.
+\end{itemize}
+Small, clean sources are repeated; the big web source is not even read once.
+\end{remark}
+
+\begin{example}[Times seen, for Common Crawl]
+Times seen $=$ (share of the mix $\times$ tokens trained on) $/$ (tokens in the source).
+\begin{steps}
+  \item Tokens drawn from Common Crawl: $0.60 \times 300\text{B} = 180\text{B}$.
+  \item Divide by its size: $180/410 = 0.44$. Less than one full pass.
+\end{steps}
+\end{example}
+
+\begin{sayit}[Say it in 20 seconds]
+Web data is cleaned first: strip HTML boilerplate, remove harmful text, deduplicate, drop low-quality pages, and balance the sources. Text is then tokenized with byte pair encoding, which merges frequent character pairs into subwords: no out-of-vocabulary words, without the long sequences of characters. Token IDs are cut into context-window-sized pieces, and each piece's labels are the same tokens shifted by one, so a window of $n$ tokens is $n$ next-token examples.
+\end{sayit}
+
+%=====================================================================
+\section{The picture}
+
+\begin{sayit}[Board 9.1 · The cleaning pipeline]
+\begin{pic}
+\begin{tikzpicture}[>={Latex[length=2mm]},font=\sffamily\small,
+  box/.style={draw=#1L,fill=#1,rounded corners=2pt,align=center,minimum height=11mm,inner sep=3pt,text width=17mm}]
+\node[box=bdq] (a) at (0,0) {raw web pages};
+\node[box=bdr] (b) at (2.25,0) {strip HTML boilerplate};
+\node[box=bdr] (c) at (4.5,0) {remove harmful text};
+\node[box=bdr] (d) at (6.75,0) {remove duplicates};
+\node[box=bdr] (e) at (9.0,0) {drop low quality};
+\node[box=bdg] (f) at (11.25,0) {balanced mixture};
+\draw[->] (a) -- (b); \draw[->] (b) -- (c); \draw[->] (c) -- (d); \draw[->] (d) -- (e); \draw[->] (e) -- (f);
+\end{tikzpicture}
+\end{pic}
+Say: ``What to use, how to clean it, how to shape it: these are the three data questions. Cleaning removes page code, unsafe text, copies and junk, then the sources are mixed by quality, not size.''
+\end{sayit}
+
+\begin{sayit}[Board 9.2 · Boilerplate around the content]
+\begin{pic}
+\begin{tikzpicture}[font=\ttfamily\scriptsize]
+\node[draw=bdqL,fill=bdq,align=left,text width=96mm,inner sep=5pt] (p) at (0,0) {%
+<html><head><meta ...><title>...</title></head>\\
+<body><div class="nav">Home | About | Login</div>\\
+\ \ <div class="main"><p>\colorbox{thmc!25}{Paris is the capital of France.}</p></div>\\
+\ \ <script src="track.js"></script>\\
+<!-- footer, ads, cookie banner --></body></html>};
+\node[font=\sffamily\small,anchor=west,align=left] at (5.2,0.1) {keep only the\\highlighted text};
+\end{tikzpicture}
+\end{pic}
+Say: ``Most of a web page is code and navigation. Only the content inside is worth training on.''
+\end{sayit}
+
+\begin{sayit}[Board 9.3 · Word-level: text to vocabulary to IDs]
+\begin{pic}
+\begin{tikzpicture}[>={Latex[length=2mm]},font=\sffamily\small]
+\node[draw=bdqL,fill=bdq,rounded corners=2pt,text width=38mm,align=left] (t) at (0,0) {The cat runs. The cat jumps. The cat sleeps. The dog runs. The dog jumps. The dog sleeps.};
+\node[draw=bdaL,fill=bda,rounded corners=4pt,align=left] (v) at (4.4,0) {\textbf{vocabulary}\\The 1 \quad cat 2\\runs 3 \quad . 4\\jumps 5 \quad sleeps 6\\dog 7};
+\node[draw=bdgL,fill=bdg,rounded corners=2pt,text width=40mm,align=left] (i) at (9.4,0) {[1, 2, 3, 4, 1, 2, 5, 4, 1, 2, 6, 4, 1, 7, 3, 4, 1, 7, 5, 4, 1, 7, 6, 4]};
+\draw[->] (t) -- node[above,font=\sffamily\scriptsize]{split} (v); \draw[->] (v) -- node[above,font=\sffamily\scriptsize]{look up} (i);
+\end{tikzpicture}
+\end{pic}
+Say: ``Split on spaces, give each new word the next number, and the text becomes a list of IDs. That list is all the model sees.''
+\end{sayit}
+
+\begin{sayit}[Board 9.4 · The out-of-vocabulary problem]
+\begin{pic}
+\begin{tikzpicture}[>={Latex[length=2mm]},font=\sffamily\small,
+  tok/.style={draw=#1L,fill=#1,rounded corners=1pt,minimum height=6mm,inner sep=3pt}]
+\foreach \w/\c [count=\i from 0] in {The/bdg,cat/bdg,is/bdr,sleeping/bdr} \node[tok=\c] (w\i) at (\i*1.7,0) {\w};
+\foreach \d/\c [count=\i from 0] in {1/bdg,2/bdg,?/bdr,?/bdr} {\node[tok=\c] (d\i) at (\i*1.7,-1.2) {\d}; \draw[->] (w\i) -- (d\i);}
+\node[font=\sffamily\scriptsize,text=trapc,anchor=west] at (6.0,-0.6) {never seen in training: no ID};
+\end{tikzpicture}
+\end{pic}
+Say: ``A word vocabulary has a hole for every word it never saw, and every new form of a word, `sleeping' as well as `sleeps', is a different word.''
+\end{sayit}
+
+\begin{sayit}[Board 9.5 · Three ways to cut ``how are you'']
+\begin{pic}
+\begin{tikzpicture}[font=\sffamily\small,
+  tok/.style={draw=#1L,fill=#1,rounded corners=1pt,minimum height=6mm,minimum width=6mm,inner sep=2pt}]
+\node[anchor=east] at (-0.3,0) {characters (11)};
+\foreach \c [count=\i from 0] in {h,o,w,\_,a,r,e,\_,y,o,u} \node[tok=bdq] at (\i*0.75,0) {\c};
+\node[anchor=east] at (-0.3,-1) {words (3)};
+\foreach \c [count=\i from 0] in {how,are,you} \node[tok=bda,minimum width=18mm] at (0.6+\i*2.6,-1) {\c};
+\node[anchor=east] at (-0.3,-2) {subwords};
+\foreach \c/\x in {how/0.6,are/3.2,you/5.8} \node[tok=bdg,minimum width=18mm] at (\x,-2) {\c};
+\node[font=\sffamily\scriptsize,text=prec,anchor=west] at (7.4,-2) {rare word: low + er};
+\end{tikzpicture}
+\end{pic}
+Say: ``Characters: tiny vocabulary, long and meaningless sequences. Words: meaningful but a huge vocabulary with holes. Subwords: common words whole, rare words in pieces.''
+\end{sayit}
+
+\begin{sayit}[Board 9.6 · BPE merges, step by step]
+\begin{pic}
+\begin{tikzpicture}[font=\sffamily\small]
+\node[anchor=west,font=\sffamily\small\bfseries] at (0,0) {start};
+\node[anchor=west,font=\sffamily\small\bfseries] at (0,-0.7) {merge l+o};
+\node[anchor=west,font=\sffamily\small\bfseries] at (0,-1.4) {merge lo+w};
+\node[anchor=west,font=\sffamily\small\bfseries] at (0,-2.1) {merge e+r};
+\foreach \y/\a/\b/\c/\d in {0/{l o w}/{l o w e s t}/{n e w e r}/{w i d e r},-0.7/{lo w}/{lo w e s t}/{n e w e r}/{w i d e r},-1.4/{low}/{low e s t}/{n e w e r}/{w i d e r},-2.1/{low}/{low e s t}/{n e w er}/{w i d er}} {
+  \node[anchor=west,font=\ttfamily\small] at (2.6,\y) {\a}; \node[anchor=west,font=\ttfamily\small] at (4.4,\y) {\b};
+  \node[anchor=west,font=\ttfamily\small] at (7.2,\y) {\c}; \node[anchor=west,font=\ttfamily\small] at (9.6,\y) {\d};}
+\node[anchor=west,draw=bdgL,fill=bdg,rounded corners=2pt] at (2.6,-3.0) {new word ``lower'' $\to$ \texttt{low er}};
+\end{tikzpicture}
+\end{pic}
+Say: ``Count neighbouring pairs, merge the most common, repeat. The merges learned on known words split an unseen word into known pieces.''
+\end{sayit}
+
+\begin{sayit}[Board 9.7 · A chat turn in special tokens]
+\begin{pic}
+\begin{tikzpicture}[font=\ttfamily\small]
+\node[draw=bdqL,fill=bdq,rounded corners=2pt,align=left,inner sep=6pt] at (0,0) {%
+{\color{defc}<|im\_start|>}system{\color{defc}<|im\_sep|>}You are a helpful assistant{\color{defc}<|im\_end|>}\\
+{\color{defc}<|im\_start|>}user{\color{defc}<|im\_sep|>}Write Python to add two numbers.{\color{defc}<|im\_end|>}\\
+{\color{defc}<|im\_start|>}assistant{\color{defc}<|im\_sep|>}};
+\end{tikzpicture}
+\end{pic}
+Say: ``The template's markers are single special tokens with their own IDs, so the model can tell whose turn it is.''
+\end{sayit}
+
+\begin{sayit}[Board 9.8 · A window and its shifted labels]
+\begin{pic}
+\begin{tikzpicture}[>={Latex[length=1.6mm]},font=\sffamily\small,
+  tok/.style={draw=#1L,fill=#1,minimum width=8mm,minimum height=6mm,inner sep=1pt}]
+\node[anchor=east] at (-0.4,0) {input}; \node[anchor=east] at (-0.4,-1.2) {label};
+\foreach \i in {1,...,10} {
+  \node[tok=bdq] (x\i) at (\i*0.95,0) {\i};
+  \pgfmathtruncatemacro{\j}{\i+1}
+  \node[tok=bdg] (y\i) at (\i*0.95,-1.2) {\j};
+  \draw[->,prec] (x\i) -- (y\i);}
+\node[font=\sffamily\scriptsize,text=prec,anchor=west] at (10.9,-0.6) {10 questions};
+\end{tikzpicture}
+\end{pic}
+Say: ``The labels are the input moved one place left. Position $t$ sees tokens 1 to $t$ and must predict token $t+1$, so one window trains ten predictions at once.''
+\end{sayit}
+
+\begin{sayit}[Board 9.9 · The ten questions inside one window]
+\begin{pic}
+\begin{tikzpicture}[font=\sffamily\small]
+\foreach \n/\nxt in {1/a,2/cold,3/morning,4/the,5/old,6/fisherman,7/pulled,8/a,9/glass,10/bottle} {
+  \fill[bdq,draw=bdqL] (0,-\n*0.42) rectangle (\n*0.75,-\n*0.42+0.34);
+  \node[anchor=west,font=\sffamily\scriptsize] at (\n*0.75+0.1,-\n*0.42+0.17) {$\to$ \nxt};}
+\node[anchor=west,font=\sffamily\scriptsize,text=prec] at (0,-4.95) {bar = tokens seen so far (On, On a, On a cold, \dots)};
+\end{tikzpicture}
+\end{pic}
+Say: ``The same 10 tokens give a 1-token question, a 2-token question, up to a 10-token question. That's why one long text is so many examples.''
+\end{sayit}
+
+\begin{sayit}[Board 9.10 · 60 tokens into windows and batches]
+\begin{pic}
+\begin{tikzpicture}[font=\sffamily\small]
+\foreach \k/\c in {0/bda,1/bdg,2/bdv,3/bdy,4/bda} {
+  \fill[\c,draw=\c L] (\k*2.2,0) rectangle (\k*2.2+2.2,0.6);
+  \node at (\k*2.2+1.1,0.3) {$w_{\k}$: \pgfmathtruncatemacro{\a}{10*\k+1}\pgfmathtruncatemacro{\b}{10*\k+10}\a--\b};}
+\fill[bdr,draw=bdrL] (11,0) rectangle (13.2,0.6); \node at (12.1,0.3) {51--60 unused};
+\draw[decorate,decoration={brace,mirror,amplitude=4pt}] (0,-0.1) -- (4.4,-0.1) node[midway,below=4pt,font=\sffamily\scriptsize] {batch 1};
+\draw[decorate,decoration={brace,mirror,amplitude=4pt}] (4.4,-0.1) -- (8.8,-0.1) node[midway,below=4pt,font=\sffamily\scriptsize] {batch 2};
+\draw[decorate,decoration={brace,mirror,amplitude=4pt}] (8.8,-0.1) -- (11,-0.1) node[midway,below=4pt,font=\sffamily\scriptsize] {batch 3};
+\end{tikzpicture}
+\end{pic}
+Say: ``Each window's last label borrows the next token, so 60 tokens give 5 full windows of 10, and 5 windows make 3 batches of 2.''
+\end{sayit}
+
+\begin{sayit}[Board 9.11 · GPT-3's mixture: share against size]
+\begin{pic}
+\begin{tikzpicture}[font=\sffamily\scriptsize,x=1cm]
+\node[font=\sffamily\small\bfseries] at (2.4,0.6) {share of the mix};
+\node[font=\sffamily\small\bfseries] at (9.0,0.6) {times each token is seen};
+\foreach \n/\w/\e [count=\i from 0] in {Common Crawl/60/0.44,WebText2/22/2.9,Books1/8/1.9,Books2/8/0.43,Wikipedia/3/3.4} {
+  \node[anchor=east] at (0,-\i*0.55) {\n};
+  \fill[defc!35,draw=defc] (0.1,-\i*0.55-0.18) rectangle (0.1+\w*0.07,-\i*0.55+0.18);
+  \node[anchor=west] at (0.15+\w*0.07,-\i*0.55) {\w\%};
+  \fill[thmc!40,draw=thmc] (7.0,-\i*0.55-0.18) rectangle (7.0+\e*1.2,-\i*0.55+0.18);
+  \node[anchor=west] at ({max(7.05+\e*1.2,8.25)},-\i*0.55) {\e};}
+\draw[trapc,dashed] (8.2,0.3) -- (8.2,-2.5) node[below] {one pass};
+\end{tikzpicture}
+\end{pic}
+Say: ``The web is 60\% of the mix but read less than once; Wikipedia is 3\% but read more than three times. Quality, not size, sets the weights.''
+\end{sayit}
+
+%=====================================================================
+\section{How it works}
+\begin{enumerate}
+  \item Collect text: web crawl, books, Wikipedia, code.
+  \item Clean it: strip boilerplate, remove harmful text, deduplicate (also near-copies), drop low-quality pages.
+  \item Learn BPE merges on the corpus; tokenize everything into token IDs. Add the special tokens.
+  \item Cut the ID stream into windows of the context-window length; the labels are the IDs shifted by one.
+  \item Group windows into batches, drawing each source by its share of the mixture.
+\end{enumerate}
+
+No formula sheet in this chapter: the window count becomes a row of the training-steps card, beneath the pretraining chapter.
+
+\begin{intuition}
+Tokenization is a compromise between meaning and coverage. Whole words carry meaning but leave holes; characters cover everything but say little. BPE lets the data decide: whatever is frequent enough becomes one token, and everything else is spelled from smaller pieces.
+\end{intuition}
+
+%=====================================================================
+\section{What they will ask}
+
+\begin{iq}[\core]{How is pretraining data cleaned?}
+Strip HTML boilerplate to keep only content, filter harmful text, deduplicate (fuzzy, to catch near-copies), drop low-quality pages such as spam and broken formatting, then mix sources by quality. GPT-3, for example, filtered Common Crawl from 45 TB to 570 GB.
+\end{iq}
+
+\begin{iq}[\core]{Why subword tokenization instead of words or characters?}
+Words: meaningful, but a huge vocabulary and out-of-vocabulary holes. Characters: no holes, but long sequences of meaningless tokens. Subwords: common words stay whole, rare ones split into known pieces, so the vocabulary is moderate (GPT-2: 50,257) and nothing is unknown.
+\end{iq}
+
+\begin{iq}[\core]{How does byte pair encoding work?}
+Start from characters. Count neighbouring pairs in the corpus, merge the most frequent into a new token, repeat until the vocabulary is the size wanted. New text is split by replaying the merges, so ``lower'' becomes ``low'' + ``er'' even if it was never seen.
+\end{iq}
+
+\begin{iq}[\core]{How are inputs and labels built for pretraining?}
+Cut the token IDs into windows of the context length. The labels are the same window shifted by one token, so position $t$ predicts token $t+1$. A window of $n$ tokens trains $n$ predictions at once.
+\end{iq}
+
+\begin{iq}{How many windows does a 60-token text give with a window of 10?}
+Each window needs one extra token for its last label, so $\lfloor (60-1)/10 \rfloor = 5$ windows, 50 predictions; with batch size 2, 3 batches.
+\end{iq}
+
+\begin{iq}{Why not sample sources by size?}
+The biggest source, the web, is also the noisiest. GPT-3 drew 60\% from Common Crawl (0.44 passes) but repeated Wikipedia 3.4 times and WebText2 2.9 times: a little repetition of good text is worth more than more noisy text.
+\end{iq}
+
+\begin{iq}{Why deduplicate?}
+Repeated text is learned again on every copy, so the model memorises it and wastes training on it. Removing copies, including near-copies, keeps the data varied.
+\end{iq}
