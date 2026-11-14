@@ -1,0 +1,281 @@
+\chapter{Picking the next token}
+\label{ch:samp}
+
+\begin{question}
+The model gives a probability for every token. How is one picked, and why does the same question get different answers?
+\end{question}
+
+\begin{whatfor}
+The model's last step is a probability distribution; the choice made from it shapes the whole answer. This chapter covers the four controls used in practice: greedy sampling (always the top token), temperature (sharpen or flatten the distribution before sampling), top-$k$ (keep only the $k$ likeliest tokens) and top-$p$ (keep the likeliest tokens until their probability adds up to $p$), and then all of them together on one ten-token example. The chapter's card is the sampling distribution, which contains chapter 8's softmax as its first row.
+\end{whatfor}
+
+\begin{setup}
+\textbf{The system:} the last step of generation, after the output layer.
+\textbf{The one thing traced:} the logits for the next word after ``The cat sat on the'', ten candidate tokens, until one is picked.
+\end{setup}
+
+\begin{recall}
+\textbf{Recall (chapter 8).} The output layer gives a logit $z_i$ for every vocabulary token, and the softmax function turns them into probabilities $p_i = e^{z_i}/\sum_j e^{z_j}$. The model produces logits at every position; when generating, only the last position's row is used, since it predicts the token after the prompt. The picked token is appended and the loop repeats.
+\end{recall}
+
+%=====================================================================
+\section{Words you need}
+
+\subsection*{The plain choices}
+
+\begin{definition}[Greedy sampling]
+\dfn{Greedy sampling} always picks the token with the highest probability. It is deterministic: the same prompt always gives the same answer. The answers tend to be dull and repetitive, so chatbots rarely use it on its own.
+\end{definition}
+
+\begin{remark}[Plain sampling]
+The other extreme draws the next token at random with the softmax probabilities: a token with probability 0.24 is picked about a quarter of the time. This is why asking the same question twice can give two different answers.
+\end{remark}
+
+\subsection*{Temperature}
+
+\begin{definition}[Temperature]
+The \dfn{temperature} $T > 0$ divides every logit before the softmax function:
+\[
+p_i = \frac{e^{z_i/T}}{\sum_j e^{z_j/T}}.
+\]
+$T = 1$ is the plain softmax (the default). $T < 1$ stretches the gaps between logits, so the likeliest token gains: answers become more certain. $T > 1$ shrinks the gaps, so unlikely tokens gain: answers become more varied. As $T \to 0$ it becomes greedy sampling; as $T \to \infty$ every token becomes equally likely.
+\end{definition}
+
+\begin{example}[Two tokens, logits 2 and 1]
+The probability of the first token is $e^{2/T}/(e^{2/T} + e^{1/T}) = 1/(1 + e^{-1/T})$.
+\begin{steps}
+  \item $T = 1$: $1/(1 + e^{-1}) = 1/1.368 = 0.731$; the other gets $0.269$.
+  \item $T = 0.5$: logits become $(4, 2)$: $1/(1 + e^{-2}) = 0.881$.
+  \item $T = 2$: logits become $(1, 0.5)$: $1/(1 + e^{-0.5}) = 0.622$.
+  \item $T = 0.1$: $(20, 10)$ gives $1.000$, almost certain. $T = 10$: $(0.2, 0.1)$ gives $0.525$, almost a coin toss.
+\end{steps}
+\end{example}
+
+\begin{remark}[Choosing $T$]
+Low temperatures suit factual answers; slightly higher ones suit stories and essays. Very high temperatures give irrelevant tokens a real chance and the text turns to nonsense, which is why most providers allow only $0$ to $2$.
+\end{remark}
+
+\subsection*{Cutting the tail}
+
+\begin{definition}[Renormalising]
+After some tokens are removed, the probabilities left no longer add to 1. \dfn{Renormalising} divides each one by their total, so they do again and keep their ratios.
+\end{definition}
+
+\begin{definition}[Top-k sampling]
+\dfn{Top-$k$ sampling} keeps only the $k$ tokens with the highest probabilities, renormalises them, and samples from those. The pool always has exactly $k$ tokens.
+\end{definition}
+
+\begin{definition}[Top-p sampling]
+\dfn{Top-$p$ sampling} (also called nucleus sampling) sorts the tokens from most to least likely and keeps adding them until their probabilities add up to at least $p$; the rest are dropped, and the kept ones are renormalised. The pool size changes with the distribution: few tokens when the model is confident, many when it isn't. $p = 1$ keeps everything; $p = 0$ keeps only the top token, which is greedy sampling.
+\end{definition}
+
+\begin{example}[Ten tokens after ``The cat sat on the'']
+Logits for mat, sofa, floor, bed, chair, roof, table, grass, moon, idea: $3.0, 2.5, 2.0, 1.5, 1.0, 0.5, 0.0, -0.5, -1.0, -1.5$.
+\begin{steps}
+  \item Softmax ($T = 1$): $0.396, 0.240, 0.146, 0.088, 0.054, 0.033, 0.020, 0.012, 0.007, 0.004$.
+  \item Top-$k$ with $k = 5$: keep mat to chair, total $0.924$; renormalise: $0.429, 0.260, 0.158, 0.096, 0.058$.
+  \item Top-$p$ with $p = 0.9$: running totals $0.396, 0.636, 0.782, 0.871, 0.924$. The fifth token is the first to reach $0.9$, so five tokens are kept, with the same renormalised values as top-$k$ here.
+\end{steps}
+\end{example}
+
+\subsection*{All three together}
+
+\begin{result}[The usual order]
+Scale the logits by $T$, apply the softmax function, keep the top $k$ and renormalise, keep the top-$p$ share of what is left and renormalise again, then sample.
+\end{result}
+
+\begin{example}[$T = 0.8$, $k = 5$, $p = 0.9$]
+Same ten logits.
+\begin{steps}
+  \item Divide by $0.8$ and apply softmax: $0.466, 0.249, 0.133, 0.071, 0.038, \dots$ The top token rises from $0.396$ to $0.466$; the tail shrinks.
+  \item Top 5, renormalised: $0.486, 0.260, 0.139, 0.075, 0.040$.
+  \item Top-$p$ 0.9 on these: running totals $0.486, 0.746, 0.886, 0.960$. The fourth token crosses $0.9$: keep 4.
+  \item Renormalise: mat $0.506$, sofa $0.271$, floor $0.145$, bed $0.078$. Sample from these four.
+\end{steps}
+Ten candidates became four, and the likeliest went from $0.396$ to $0.506$.
+\end{example}
+
+\begin{sayit}[Say it in 20 seconds]
+Greedy takes the top token every time: repeatable but dull. Sampling draws from the softmax, which is why answers vary. Temperature divides the logits first: below 1 sharpens, above 1 flattens. Top-$k$ keeps a fixed number of the likeliest tokens; top-$p$ keeps the smallest set whose probability reaches $p$, so it adapts to how confident the model is. In practice: temperature, then top-$k$, then top-$p$, renormalise, sample.
+\end{sayit}
+
+%=====================================================================
+\section{The picture}
+
+\begin{sayit}[Board 12.1 · Where sampling happens]
+\begin{pic}
+\begin{tikzpicture}[>={Latex[length=2mm]},font=\sffamily\small,
+  box/.style={draw=#1L,fill=#1,rounded corners=2pt,align=center,minimum height=10mm,inner sep=3pt,text width=21mm}]
+\node[box=bdq] (a) at (0,0) {``The cat sat on the''};
+\node[box=bdv] (b) at (2.75,0) {decoder};
+\node[box=bdy] (c) at (5.5,0) {last row: 10 logits};
+\node[box=bdy] (d) at (8.25,0) {$\div T$, softmax, top-$k$, top-$p$};
+\node[box=bdg] (e) at (11.0,0) {sample: ``mat''};
+\draw[->] (a) -- (b); \draw[->] (b) -- (c); \draw[->] (c) -- (d); \draw[->] (d) -- (e);
+\draw[->,thmc,densely dotted] (e.south) -- ++(0,-0.5) -| node[pos=0.25,below,font=\sffamily\scriptsize]{append and repeat} (a.south);
+\end{tikzpicture}
+\end{pic}
+Say: ``Everything in this chapter happens between the logits and the chosen token. The model is the same; only the choice changes.''
+\end{sayit}
+
+\begin{sayit}[Board 12.2 · Greedy against sampling]
+\begin{pic}
+\begin{tikzpicture}[font=\sffamily\scriptsize]
+\foreach \p/\n [count=\i from 0] in {0.396/mat,0.240/sofa,0.146/floor,0.088/bed,0.054/chair} {
+  \fill[thmc!40,draw=thmc] (\i*0.9,0) rectangle (\i*0.9+0.6,4*\p); \node[below] at (\i*0.9+0.3,0) {\n};}
+\draw[trapc,thick] (-0.1,1.584) rectangle (0.7,1.75); \node[text=trapc,anchor=south] at (0.3,1.75) {greedy: always mat};
+\node[anchor=west,align=left,font=\sffamily\small] at (5.2,0.9) {sampling: mat 40\% of the time,\\sofa 24\%, floor 15\%, \dots};
+\end{tikzpicture}
+\end{pic}
+Say: ``Greedy always takes the tallest bar, so it repeats itself. Sampling rolls a die weighted by the bars, so answers differ from run to run.''
+\end{sayit}
+
+\begin{sayit}[Board 12.3 · Temperature on two tokens]
+\begin{pic}
+\begin{tikzpicture}[font=\sffamily\scriptsize]
+\foreach \T/\p [count=\i from 0] in {0.1/1.000,0.5/0.881,1/0.731,2/0.622,10/0.525} {
+  \pgfmathsetmacro{\q}{1-\p}
+  \fill[defc!40,draw=defc] (\i*2.4,0) rectangle (\i*2.4+0.7,2*\p); \node[above] at (\i*2.4+0.35,2*\p) {\p};
+  \fill[exc!35,draw=exc] (\i*2.4+0.8,0) rectangle (\i*2.4+1.5,2*\q+0.01); \node[above] at (\i*2.4+1.15,2*\q) {\pgfmathprintnumber[fixed,fixed zerofill,precision=3]{\q}};
+  \node[below] at (\i*2.4+0.75,0) {$T = \T$};}
+\node[anchor=west] at (0,-0.9) {logits 2 and 1; \textcolor{defc}{first token}, \textcolor{exc}{second token}};
+\end{tikzpicture}
+\end{pic}
+Say: ``Same logits, five temperatures. Cold: the winner takes everything. Hot: a coin toss.''
+\end{sayit}
+
+\begin{sayit}[Board 12.4 · Ten tokens at $T = 1$ and $T = 0.8$]
+\begin{pic}
+\begin{tikzpicture}[font=\sffamily\scriptsize]
+\foreach \a/\b/\n [count=\i from 0] in {0.396/0.466/mat,0.240/0.249/sofa,0.146/0.133/floor,0.088/0.071/bed,0.054/0.038/chair,0.033/0.020/roof,0.020/0.011/table,0.012/0.006/grass,0.007/0.003/moon,0.004/0.002/idea} {
+  \fill[prec!30,draw=prec] (\i*1.25,0) rectangle (\i*1.25+0.5,5*\a);
+  \fill[defc!45,draw=defc] (\i*1.25+0.5,0) rectangle (\i*1.25+1.0,5*\b);
+  \node[below] at (\i*1.25+0.5,0) {\n};}
+\node[anchor=west] at (5.5,2.0) {\textcolor{prec}{grey}: $T = 1$ \quad \textcolor{defc}{blue}: $T = 0.8$};
+\node[anchor=west] at (5.5,1.6) {mat: 0.396 $\to$ 0.466};
+\end{tikzpicture}
+\end{pic}
+Say: ``Lowering the temperature a little lifts the top tokens and sinks the tail.''
+\end{sayit}
+
+\begin{sayit}[Board 12.5 · Top-$k$ with $k = 5$]
+\begin{pic}
+\begin{tikzpicture}[font=\sffamily\scriptsize]
+\foreach \p/\n [count=\i from 0] in {0.396/mat,0.240/sofa,0.146/floor,0.088/bed,0.054/chair,0.033/roof,0.020/table,0.012/grass,0.007/moon,0.004/idea} {
+  \ifnum\i<5 \fill[thmc!40,draw=thmc] (\i*1.25,0) rectangle (\i*1.25+0.8,4*\p); \else \fill[prec!15,draw=prec!50] (\i*1.25,0) rectangle (\i*1.25+0.8,4*\p+0.01); \fi
+  \node[below] at (\i*1.25+0.4,0) {\n};}
+\draw[trapc,dashed] (6.0,-0.4) -- (6.0,1.8); \node[text=trapc,anchor=west] at (6.1,1.6) {cut after 5};
+\node[anchor=west] at (7.0,1.0) {kept total 0.924 $\to$ renormalised:};
+\node[anchor=west] at (7.0,0.6) {0.429, 0.260, 0.158, 0.096, 0.058};
+\end{tikzpicture}
+\end{pic}
+Say: ``Top-$k$ is a fixed-size shortlist: always $k$ tokens, however confident or unsure the model is.''
+\end{sayit}
+
+\begin{sayit}[Board 12.6 · Top-$p$ with $p = 0.9$]
+\begin{pic}
+\begin{tikzpicture}[font=\sffamily\scriptsize,x=1.2cm,y=2.4cm]
+\draw[prec] (0,0) -- (10.2,0); \draw[prec] (0,0) -- (0,1.05);
+\draw[trapc,dashed] (0,0.9) -- (10.2,0.9) node[right] {$p = 0.9$};
+\foreach \p/\c/\n [count=\i from 0] in {0.396/0.396/mat,0.240/0.636/sofa,0.146/0.782/floor,0.088/0.871/bed,0.054/0.924/chair,0.033/0.957/roof,0.020/0.976/table,0.012/0.988/grass,0.007/0.996/moon,0.004/1.000/idea} {
+  \ifnum\i<5 \fill[thmc!40,draw=thmc] (\i+0.2,0) rectangle (\i+0.8,\p); \else \fill[prec!15,draw=prec!50] (\i+0.2,0) rectangle (\i+0.8,\p+0.004); \fi
+  \fill[defc] (\i+0.5,\c) circle (1.5pt);
+  \node[below] at (\i+0.5,0) {\n};}
+\draw[defc] (0.5,0.396) -- (1.5,0.636) -- (2.5,0.782) -- (3.5,0.871) -- (4.5,0.924) -- (5.5,0.957) -- (6.5,0.976) -- (7.5,0.988) -- (8.5,0.996) -- (9.5,1.0);
+\node[defc,anchor=north west] at (4.6,0.85) {0.924: first $\ge 0.9$};
+\end{tikzpicture}
+\end{pic}
+Say: ``Add tokens from the top until the running total reaches $p$. A confident model needs few tokens to get there; an unsure one needs many.''
+\end{sayit}
+
+\begin{sayit}[Board 12.7 · All three, in order]
+\begin{pic}
+\begin{tikzpicture}[>={Latex[length=2mm]},font=\sffamily\small,
+  box/.style={draw=#1L,fill=#1,rounded corners=2pt,align=center,minimum height=12mm,inner sep=3pt,text width=19mm}]
+\node[box=bdq] (a) at (0,0) {10 logits};
+\node[box=bdy] (b) at (2.5,0) {$\div\,0.8$, softmax\\10 tokens};
+\node[box=bda] (c) at (5.0,0) {top-$k$ 5\\renormalise};
+\node[box=bda] (d) at (7.5,0) {top-$p$ 0.9\\4 left};
+\node[box=bdg] (e) at (10.0,0) {sample from\\0.506, 0.271, 0.145, 0.078};
+\draw[->] (a) -- (b); \draw[->] (b) -- (c); \draw[->] (c) -- (d); \draw[->] (d) -- (e);
+\end{tikzpicture}
+\end{pic}
+Say: ``Temperature reshapes, top-$k$ caps the count, top-$p$ trims to the probability mass, and what survives is renormalised and sampled.''
+\end{sayit}
+
+\begin{sayit}[Board 12.8 · The temperature dial]
+\begin{pic}
+\begin{tikzpicture}[font=\sffamily\scriptsize]
+\shade[left color=defc!50,right color=trapc!50] (0,0) rectangle (10,0.4);
+\foreach \x/\l in {0/0,5/1,10/2} {\draw (\x,0) -- (\x,-0.15); \node[below] at (\x,-0.15) {$T = \l$};}
+\node[anchor=south] at (0.9,0.45) {greedy, repeatable};
+\node[anchor=south] at (5,0.45) {default};
+\node[anchor=south] at (9.1,0.45) {varied, riskier};
+\node[anchor=north] at (2.5,-0.6) {facts, code};
+\node[anchor=north] at (7.5,-0.6) {stories, essays};
+\end{tikzpicture}
+\end{pic}
+Say: ``Low for factual work, a bit higher for creative work. Providers stop at 2 because beyond that the tail takes over.''
+\end{sayit}
+
+%=====================================================================
+\section{How it works}
+\begin{enumerate}
+  \item Take the logits of the last position.
+  \item Divide them by the temperature $T$.
+  \item Apply the softmax function.
+  \item Keep the top $k$; renormalise.
+  \item Keep the smallest top set reaching $p$; renormalise.
+  \item Draw one token (or take the top one, for greedy), append it, and repeat.
+\end{enumerate}
+
+%=====================================================================
+\section*{Formula sheet}
+\addcontentsline{toc}{section}{Formula sheet}
+
+\begin{mastercard}[label=card:samp]{Sampling distribution}
+The next token is drawn from the softmax of the temperature-scaled logits, restricted to a kept set $S$ and renormalised over it. With $z_i$ the logits, $T > 0$ the temperature, and $S$ the tokens kept by top-$k$ (the $k$ likeliest) and then top-$p$ (the fewest likeliest whose renormalised probabilities reach $p$):
+\[
+\boxed{p_i = \frac{e^{z_i/T}}{\sum_{j \in S} e^{z_j/T}}\ \text{ for } i \in S, \qquad p_i = 0\ \text{ for } i \notin S.}
+\]
+\begin{plugrows}
+  \plugrow{Plain softmax (chapter 8)}{\pstep{Box: $p_i = e^{z_i/T}/\sum_{j\in S} e^{z_j/T}$.}\pstep{No temperature: $T = 1$. No cut: $S$ = all tokens.}}{$p_i = e^{z_i}/\sum_j e^{z_j}$}{always}{Paris 4, Lyon 2, the 1, banana $-2$: $e^4/(e^4 + e^2 + e^1 + e^{-2}) = 54.60/64.84 = 0.842$}
+  \plugrow{Temperature only}{\pstep{Box with $S$ = all tokens.}\pstep{Two tokens, logits $z_1, z_2$: divide top and bottom by $e^{z_1/T}$.}}{$p_1 = 1/\big(1 + e^{-(z_1 - z_2)/T}\big)$}{$T > 0$}{$z = (2, 1)$: $T = 0.5$: $1/(1 + e^{-2}) = 0.881$; $T = 1$: $0.731$; $T = 2$: $1/(1 + e^{-0.5}) = 0.622$}
+  \plugrow{Greedy}{\pstep{Box with $k = 1$ (or $p = 0$, or $T \to 0$).}\pstep{$S$ = the top token only, so the sum has one term.}}{$p_{\text{top}} = 1$, all others 0}{deterministic output wanted}{$z = (2, 1)$, $T = 0.1$: $1/(1 + e^{-10}) = 1.000$; the ten-token example always gives ``mat''}
+  \plugrow{Very high temperature}{\pstep{Box with $S$ = all, $T \to \infty$.}\pstep{Every $z_i/T \to 0$, so every $e^{z_i/T} \to 1$.}}{$p_i \to 1/|S|$, uniform}{never in practice}{$z = (2, 1)$, $T = 10$: $1/(1 + e^{-0.1}) = 0.525$, near $0.5$}
+  \plugrow{Top-$k$}{\pstep{Box with $T = 1$.}\pstep{$S$ = the $k$ largest logits.}\pstep{Denominator: their sum only.}}{$k$ tokens, renormalised}{$k \le V$}{ten logits, $k = 5$: kept total $0.924$; mat $0.396/0.924 = 0.429$, then $0.260, 0.158, 0.096, 0.058$}
+  \plugrow{Top-$p$}{\pstep{Box with $T = 1$.}\pstep{Sort; add probabilities until the total first reaches $p$; $S$ = those tokens.}\pstep{Renormalise over $S$.}}{a pool whose size depends on the distribution}{$0 \le p \le 1$}{$p = 0.9$: totals $0.396, 0.636, 0.782, 0.871, 0.924$, so 5 tokens}
+  \plugrow{All three}{\pstep{Box with $T = 0.8$: softmax of $z/0.8$.}\pstep{Top-$k$ $5$: renormalise over the top five.}\pstep{Top-$p$ $0.9$ on those: totals $0.486, 0.746, 0.886, 0.960$: keep 4.}\pstep{Box over these 4.}}{four tokens, renormalised}{$T$, then $k$, then $p$}{mat $0.506$, sofa $0.271$, floor $0.145$, bed $0.078$}
+\end{plugrows}
+\end{mastercard}
+
+\begin{intuition}
+Temperature changes the shape of the distribution; top-$k$ and top-$p$ change its support. Shape decides how bold the choice is among sensible tokens; support decides which tokens are sensible enough to be considered at all.
+\end{intuition}
+
+%=====================================================================
+\section{What they will ask}
+
+\begin{iq}[\core]{Why does an LLM give different answers to the same question?}
+It samples the next token from a probability distribution instead of always taking the top one. Any token with real probability can be drawn, and one different token changes everything written after it. Greedy sampling (or temperature near 0) makes it repeatable.
+\end{iq}
+
+\begin{iq}[\core]{What does temperature do, mathematically?}
+It divides every logit by $T$ before the softmax function. $T < 1$ widens the gaps, so the top token gains; $T > 1$ narrows them, so the tail gains. Logits 2 and 1: the top token gets $0.881$ at $T = 0.5$, $0.731$ at $T = 1$, $0.622$ at $T = 2$.
+\end{iq}
+
+\begin{iq}[\core]{Top-$k$ against top-$p$?}
+Top-$k$ keeps a fixed number of tokens. Top-$p$ keeps the smallest set whose probabilities reach $p$, so the pool shrinks when the model is confident and grows when it isn't. Both renormalise what they keep.
+\end{iq}
+
+\begin{iq}{In what order are they applied?}
+Temperature on the logits, then the softmax function, then top-$k$, then top-$p$, renormalising after each cut, then sample. With $T = 0.8$, $k = 5$, $p = 0.9$, ten candidates became four.
+\end{iq}
+
+\begin{iq}{What do $p = 0$ and $p = 1$ mean in top-$p$?}
+$p = 1$ keeps every token: plain sampling. $p = 0$ keeps only the top token: greedy.
+\end{iq}
+
+\begin{iq}{Which settings for code and which for a story?}
+Code and facts: low temperature (or greedy), so the likeliest tokens win. Stories: a somewhat higher temperature, with top-$p$ to stop the long tail of nonsense tokens. Much above 2 the text breaks down.
+\end{iq}

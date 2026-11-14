@@ -80,4 +80,27 @@ assert [r((x - mu) / sqrt(var), 3) for x in xs] == [-1.342, -0.447, 0.447, 1.342
 assert 512 // 4 == 128 and 4 * 128 == 512 and 768 // 12 == 64 and 4 * 768 == 3072
 assert 1024 ** 2 == 1048576 and 2048 ** 2 == 4194304 == 4 * 1048576
 
+# ch 12: temperature on two tokens, top-k / top-p / combined on ten logits
+two = lambda T: 1 / (1 + exp(-1 / T))
+assert r(1 + exp(-1), 3) == 1.368
+assert [r(two(T), 3) for T in (0.1, 0.5, 1, 2, 10)] == [1.000, 0.881, 0.731, 0.622, 0.525]
+z10 = [3.0, 2.5, 2.0, 1.5, 1.0, 0.5, 0.0, -0.5, -1.0, -1.5]
+def softT(z, T=1): e = [exp(x / T) for x in z]; t = sum(e); return [x / t for x in e]
+def renorm(q): t = sum(q); return [x / t for x in q]
+def topp(q, p):
+    run, out = 0, []
+    for x in q:
+        run += x; out.append(r(run, 3))
+        if run >= p: return out
+P1 = softT(z10)
+assert [r(x, 3) for x in P1] == [0.396, 0.240, 0.146, 0.088, 0.054, 0.033, 0.020, 0.012, 0.007, 0.004]
+assert r(sum(P1[:5]), 3) == 0.924 and [r(x, 3) for x in renorm(P1[:5])] == [0.429, 0.260, 0.158, 0.096, 0.058]
+assert topp(P1, 0.9) == [0.396, 0.636, 0.782, 0.871, 0.924]
+assert [r(sum(P1[:i]), 3) for i in range(6, 11)] == [0.957, 0.976, 0.988, 0.996, 1.000]
+P8 = softT(z10, 0.8)
+assert [r(x, 3) for x in P8] == [0.466, 0.249, 0.133, 0.071, 0.038, 0.020, 0.011, 0.006, 0.003, 0.002]
+K8 = renorm(P8[:5]); assert [r(x, 3) for x in K8] == [0.486, 0.260, 0.139, 0.075, 0.040]
+assert topp(K8, 0.9) == [0.486, 0.746, 0.886, 0.960]
+assert [r(x, 3) for x in renorm(K8[:4])] == [0.506, 0.271, 0.145, 0.078]
+
 print('verify: ok')
