@@ -123,4 +123,16 @@ assert r(w0 - 1.1 * g, 2) == 0.6 and r((w0 - 1.1 * g - 3) ** 2, 2) == 5.76
 assert 10**9 * 4 == 4e9 and 4 + 4 + 8 == 16 and 16 + 10 == 26 and 16 + 15 == 31
 assert N * 4 == 497273856 and r(N * 4 / 1e9, 2) == 0.50 and 16 * 10**10 == 160e9
 
+# ch 14: scores with and without the cache, cached step 3, cache bytes
+assert sum(t * t for t in range(1, 5)) == 30 and sum(range(1, 5)) == 10
+sq, li = sum(t * t for t in range(1, 1025)), sum(range(1, 1025))
+assert sq == 358438400 and li == 524800 and round(sq / li) == 683
+q3 = (1, 1); sc = [dot(q3, k) / sqrt(2) for k in Qm]
+assert [r(x, 3) for x in sc] == [0.707, 0.707, 1.414] and r(sqrt(2), 3) == 1.414
+assert [r(x, 3) for x in soft(sc)] == [0.248, 0.248, 0.503] and blend(soft(sc)) == (0.752, 0.752)
+kv = lambda L, nkv, dh, n, B=1, b=2: 2 * L * nkv * dh * n * B * b
+assert kv(12, 12, 64, 1024) == 37748736 and kv(12, 12, 64, 1024) / 2**20 == 36
+big = kv(60, 128, 128, 100000); assert big == 393216000000 and round(big / 1e9) == 393 and round(big / 2**30) == 366
+assert big / 80e9 > 4
+
 print('verify: ok')

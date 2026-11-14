@@ -1,0 +1,222 @@
+\chapter{The KV cache}
+\label{ch:kv}
+
+\begin{question}
+Generating one token at a time repeats most of the attention work of the step before. How does a cache of keys and values remove that repetition, and what does it cost?
+\end{question}
+
+\begin{whatfor}
+Chapter 8's loop runs the whole model again for every new token. This chapter looks inside one step and finds that almost all the attention work was already done at the previous step. It then shows the fix: keep every token's key and value in GPU memory, compute only the newest token's query, key and value, and attend from that one query to all the stored keys. The work per new token drops from quadratic to linear in the context length; the price is memory, which for big models and long contexts runs to hundreds of gigabytes. The memory formula becomes a card in the next chapter, once multi-query and grouped-query attention are there to plug in.
+\end{whatfor}
+
+\begin{setup}
+\textbf{The system:} a decoder generating text, one token per step (inference only).
+\textbf{The one thing traced:} step 3 of generation, with and without the cache, using chapter 11's three tokens.
+\end{setup}
+
+\begin{recall}
+\textbf{Recall.} Chapter 11: causal self-attention scores $q_i \cdot k_j/\sqrt{d_k}$ for $j \le i$, softmaxes each row and blends the values; with $n$ tokens there are up to $n \times n$ scores per head per layer. Chapter 13: in training the loss uses every position; in generation only the last position's probabilities are used.
+\end{recall}
+
+%=====================================================================
+\section{Words you need}
+
+\subsection*{The waste}
+
+\begin{result}[Generation without a cache repeats itself]
+At step $t$ the model takes all $t$ tokens, computes their queries, keys and values in every layer, and the full $t \times t$ (masked) score matrix. At step $t + 1$ it does the same for $t + 1$ tokens. But the first $t$ tokens' keys and values are exactly the same as before (causal attention means a token's vectors never depend on later tokens), and of the new scores only the last row is ever used. Everything else is recomputed only to be thrown away.
+\end{result}
+
+\begin{example}[Scores computed over four steps]
+Count the scores per head per layer.
+\begin{steps}
+  \item Without a cache, step $t$ builds a $t \times t$ matrix: $1 + 4 + 9 + 16 = 30$ scores for 4 tokens.
+  \item Only the last row is needed: $1 + 2 + 3 + 4 = 10$ scores.
+  \item For 1,024 tokens the totals are $\sum t^2 = 358{,}438{,}400$ against $\sum t = 524{,}800$, about 683 times fewer.
+\end{steps}
+\end{example}
+
+\subsection*{The fix}
+
+\begin{definition}[KV cache]
+The \dfn{KV cache} keeps, for every layer and every head, the key and value vectors of every token generated so far, in GPU memory. At each new step:
+\begin{itemize}
+  \item embed only the newest token;
+  \item compute only its query, key and value;
+  \item append its key and value to the cache;
+  \item score its one query against all cached keys, softmax, and blend all cached values;
+  \item the output layer gives logits for this one position, and the next token is sampled.
+\end{itemize}
+It is used only in inference. Training processes every position at once and needs every position's output, so there is nothing to cache.
+\end{definition}
+
+\begin{remark}[Why cache keys and values but not queries]
+A query is used once, by its own token, to read from the others; old queries are never needed again. Keys and values are read by every later token, so they are worth keeping. The newest token still needs all the keys and values, because its output must carry the context of every token before it.
+\end{remark}
+
+\begin{example}[Step 3 with the cache]
+Chapter 11's tokens: $k_1 = (1, 0)$, $k_2 = (0, 1)$, $v_1 = (1, 0)$, $v_2 = (0, 1)$ are already in the cache. Token 3 arrives.
+\begin{steps}
+  \item Compute only token 3's vectors: $q_3 = k_3 = (1, 1)$, $v_3 = (1, 1)$. Append $k_3$, $v_3$ to the cache.
+  \item One row of scores: $q_3 \cdot (k_1, k_2, k_3)/\sqrt2 = (1, 1, 2)/1.414 = (0.707, 0.707, 1.414)$.
+  \item Softmax: $(0.248, 0.248, 0.503)$; blend the cached values: $(0.752, 0.752)$.
+  \item This is exactly row 3 of chapter 11's masked attention, computed with 3 scores instead of 9.
+\end{steps}
+\end{example}
+
+\begin{result}[From quadratic to linear per token]
+Per new token, attention without a cache costs about $t^2$ (all scores again); with the cache it costs about $t$ (one query against $t$ keys). Generation with the cache stays fast as the text grows; without it, each token is slower than the last.
+\end{result}
+
+\subsection*{The price}
+
+\begin{definition}[KV-cache memory]
+The \dfn{KV-cache memory} is the GPU memory the cache occupies. It stores two vectors (key and value) per token, per head, per layer, per sequence in the batch:
+\[
+\text{bytes} = 2 \times L \times n_{\text{heads}} \times d_{\text{head}} \times n_{\text{ctx}} \times B \times b,
+\]
+where $L$ is the number of layers, $n_{\text{heads}}$ heads of size $d_{\text{head}}$, $n_{\text{ctx}}$ tokens, batch $B$, and $b$ bytes per number (2 in 16-bit).
+\end{definition}
+
+\begin{example}[GPT-2 small, full context, 16-bit]
+$L = 12$, $n_{\text{heads}} = 12$, $d_{\text{head}} = 64$, $n_{\text{ctx}} = 1{,}024$, $B = 1$, $b = 2$.
+\begin{steps}
+  \item $2 \times 12 \times 12 \times 64 \times 1{,}024 \times 1 \times 2 = 37{,}748{,}736$ bytes.
+  \item $37{,}748{,}736 / 2^{20} = 36$ MiB. Easy to hold.
+\end{steps}
+\end{example}
+
+\begin{example}[A large model with a long context]
+$L = 60$, $n_{\text{heads}} = 128$, $d_{\text{head}} = 128$, $n_{\text{ctx}} = 100{,}000$, $B = 1$, $b = 2$.
+\begin{steps}
+  \item $2 \times 60 \times 128 \times 128 \times 100{,}000 \times 1 \times 2 = 393{,}216{,}000{,}000$ bytes.
+  \item That is 393 GB, or $366$ GiB, for the cache of one conversation alone: more than four 80-GB GPUs.
+\end{steps}
+\end{example}
+
+\begin{sayit}[Say it in 20 seconds]
+Generating token by token, a model without a cache recomputes every earlier token's keys and values and the whole score matrix, though only the last row is used. The KV cache stores each token's key and value per layer and head; each step computes only the new token's query, key and value and attends from that one query to the cache. Attention per token goes from quadratic to linear. The cost is memory: two times layers times heads times head size times context times batch times bytes: 36 MiB for GPT-2 small, hundreds of GB for a big model with a 100k context.
+\end{sayit}
+
+%=====================================================================
+\section{The picture}
+
+\begin{sayit}[Board 14.1 · Without a cache: everything again, every step]
+\begin{pic}
+\begin{tikzpicture}[font=\sffamily\scriptsize]
+\foreach \t in {1,...,4} {
+  \pgfmathsetmacro{\x}{(\t-1)*(\t)/2*0.5+(\t-1)*0.6}
+  \foreach \i in {1,...,\t} \foreach \j in {1,...,\i} {
+    \ifnum\i=\t \fill[thmc!45,draw=thmc] (\x+\j*0.5-0.5,-\i*0.5) rectangle +(0.5,0.5);
+    \else \fill[trapc!20,draw=trapc!60] (\x+\j*0.5-0.5,-\i*0.5) rectangle +(0.5,0.5); \fi}
+  \node[anchor=south] at (\x+\t*0.25,0.1) {step \t};}
+\node[anchor=west,align=left] at (7.3,-1.0) {\textcolor{trapc}{red}: recomputed, thrown away\\\textcolor{thmc}{green}: the row actually used};
+\end{tikzpicture}
+\end{pic}
+Say: ``Each step rebuilds the whole triangle of scores, but only its bottom row decides the next token.''
+\end{sayit}
+
+\begin{sayit}[Board 14.2 · With a cache: one new row]
+\begin{pic}
+\begin{tikzpicture}[>={Latex[length=2mm]},font=\sffamily\small,
+  box/.style={draw=#1L,fill=#1,rounded corners=2pt,align=center,minimum height=8mm,inner sep=3pt}]
+\node[box=bdq] (tok) at (0,0) {new token 3};
+\node[box=bda] (q) at (3,0.9) {$q_3$};
+\node[box=bda] (kv) at (3,-0.9) {$k_3$, $v_3$};
+\node[draw=bdvL,fill=bdv,rounded corners=2pt,minimum width=26mm,minimum height=22mm,align=center] (c) at (6.6,-0.9) {};
+\node at (6.6,0.35) {\textbf{KV cache}};
+\foreach \i/\l in {0/{$k_1$ \ $v_1$},1/{$k_2$ \ $v_2$},2/{$k_3$ \ $v_3$ (new)}} \node[font=\sffamily\scriptsize] at (6.6,-0.3-\i*0.5) {\l};
+\node[box=bdy] (s) at (10.2,0.9) {$q_3$ against $k_1, k_2, k_3$\\one row: 3 scores};
+\node[box=bdg] (o) at (10.2,-0.9) {blend $v_1, v_2, v_3$\\$\to$ next token};
+\draw[->] (tok) -- (q); \draw[->] (tok) -- (kv); \draw[->] (kv) -- node[below,font=\sffamily\scriptsize]{append} (c); \draw[->] (q) -- (s); \draw[->] (c) -- (s); \draw[->] (s) -- (o);
+\end{tikzpicture}
+\end{pic}
+Say: ``Only the newest token is pushed through the layers. Its key and value join the cache; its query reads the whole cache.''
+\end{sayit}
+
+\begin{sayit}[Board 14.3 · Only the last row matters]
+\begin{pic}
+\begin{tikzpicture}[font=\sffamily\scriptsize]
+\foreach \i in {1,...,5} \foreach \j in {1,...,\i} {
+  \ifnum\i=5 \fill[thmc!45,draw=thmc] (\j*0.6,-\i*0.6) rectangle +(0.6,0.6); \else \fill[prec!12,draw=prec!40] (\j*0.6,-\i*0.6) rectangle +(0.6,0.6); \fi}
+\node[anchor=west,align=left] at (4.0,-1.6) {grey rows: earlier tokens' outputs, already used\\at earlier steps; never needed again};
+\node[anchor=west,align=left] at (4.0,-2.75) {green row: newest query $\times$ every cached key};
+\end{tikzpicture}
+\end{pic}
+Say: ``Generation only samples from the last position, so only the last row of scores, and only the last query, are worth computing.''
+\end{sayit}
+
+\begin{sayit}[Board 14.4 · Work per new token]
+\begin{pic}
+\begin{tikzpicture}[font=\sffamily\scriptsize,x=1.1cm,y=0.12cm]
+\draw[->,prec] (0,0) -- (8.5,0) node[right] {tokens so far $t$}; \draw[->,prec] (0,0) -- (0,26) node[above] {scores per step};
+\draw[trapc,thick,domain=0:5,samples=30] plot (\x,{\x*\x}); \node[trapc,anchor=west] at (5,25) {no cache: $t^2$};
+\draw[thmc,thick,domain=0:8] plot (\x,{\x}); \node[thmc,anchor=west] at (8,8) {cache: $t$};
+\end{tikzpicture}
+\end{pic}
+Say: ``Without the cache each new token costs more than the last, quadratically; with it, the cost grows only in step with the context.''
+\end{sayit}
+
+\begin{sayit}[Board 14.5 · What the cache holds]
+\begin{pic}
+\begin{tikzpicture}[font=\sffamily\scriptsize]
+\foreach \l in {0,1,2} {
+  \foreach \h in {0,1,2} {
+    \fill[bda,draw=bdaL] (\l*4.2+\h*1.25,0) rectangle +(0.55,1.6); \node at (\l*4.2+\h*1.25+0.275,0.8) {K};
+    \fill[bdv,draw=bdvL] (\l*4.2+\h*1.25+0.6,0) rectangle +(0.55,1.6); \node at (\l*4.2+\h*1.25+0.875,0.8) {V};}
+  \node at (\l*4.2+1.75,-0.3) {layer \the\numexpr\l+1\relax: heads 1--3};}
+\node[anchor=west] at (0,2.0) {each block: $n_{\text{ctx}}$ rows $\times$ $d_{\text{head}}$ numbers; one set per sequence in the batch};
+\end{tikzpicture}
+\end{pic}
+Say: ``Two matrices per head per layer, each as tall as the context. Multiply it all out and you get the cache size.''
+\end{sayit}
+
+\begin{sayit}[Board 14.6 · Cache size from small to large]
+\begin{pic}
+\begin{tikzpicture}[font=\sffamily\scriptsize]
+\node[draw=bdgL,fill=bdg,rounded corners=2pt,align=center,text width=48mm] at (0,0) {\textbf{GPT-2 small}\\12 layers, 12 heads of 64, 1,024 tokens\\$= 37{,}748{,}736$ B $=$ 36 MiB};
+\node[draw=bdrL,fill=bdr,rounded corners=2pt,align=center,text width=48mm] at (6.8,0) {\textbf{large model, long context}\\60 layers, 128 heads of 128, 100k tokens\\$= 393$ GB $=$ 366 GiB};
+\draw[->,thick,prec] (2.7,0) -- (4.1,0);
+\end{tikzpicture}
+\end{pic}
+Say: ``Thirty-six megabytes is nothing; four hundred gigabytes is several GPUs' worth for one user. That is the problem the next chapter shrinks.''
+\end{sayit}
+
+%=====================================================================
+\section{How it works}
+\begin{enumerate}
+  \item Prompt: run all prompt tokens once, storing every layer's keys and values in the cache.
+  \item New step: embed only the newest token; in each layer compute its $q$, $k$, $v$; append $k$, $v$ to that layer's cache.
+  \item Attention: the one query against all cached keys, softmax, blend all cached values.
+  \item Output layer on this one position; sample; repeat.
+  \item Memory grows by $2 \times L \times n_{\text{heads}} \times d_{\text{head}} \times b$ bytes per token per sequence.
+\end{enumerate}
+
+No formula sheet in this chapter: the cache-memory formula becomes the KV-cache card in the next chapter, where multi-query and grouped-query attention are its other rows.
+
+\begin{intuition}
+Past tokens never change in a causal model, so neither do their keys and values: computing them again is pure waste. The cache trades memory for time, which is a good deal until the memory itself becomes the bottleneck.
+\end{intuition}
+
+%=====================================================================
+\section{What they will ask}
+
+\begin{iq}[\core]{What is the KV cache and why does it help?}
+During generation each new token would otherwise recompute the keys and values of all earlier tokens and the whole score matrix. The cache stores keys and values per layer and head; each step computes only the newest token's $q, k, v$ and attends from that one query to the cache. Per-token attention becomes linear in the context instead of quadratic.
+\end{iq}
+
+\begin{iq}[\core]{Why cache K and V but not Q?}
+A token's query is used only for its own output, at its own step. Keys and values are read by every later token's query. And because attention is causal, old keys and values never change.
+\end{iq}
+
+\begin{iq}[\core]{How much memory does it take?}
+$2 \times$ layers $\times$ heads $\times$ head size $\times$ context $\times$ batch $\times$ bytes. GPT-2 small in 16-bit at 1,024 tokens: 36 MiB. A 60-layer model with 128 heads of 128 at 100,000 tokens: 393 GB for one sequence.
+\end{iq}
+
+\begin{iq}{Is the KV cache used in training?}
+No. Training computes all positions in parallel with the causal mask and needs every position's output for the loss; nothing is repeated, so there is nothing to cache.
+\end{iq}
+
+\begin{iq}{Does the cache change the output?}
+No. The newest token's row of attention is the same numbers either way; chapter 11's row 3 comes out as $(0.752, 0.752)$ with 3 scores instead of 9.
+\end{iq}
